@@ -1,20 +1,96 @@
-import {useEffect,useRef,useState} from 'react';
-import {Camera,UploadCloud,Scissors,Sparkles,Download,ArrowRight,Check,Layers,RefreshCw} from 'lucide-react';
-type Job={job_id:string,status:string,image?:string,garment_mask?:string,background_mask?:string,result_url?:string,error?:string};
-const presets=[{key:'studio',label:'Clean studio',subtitle:'Seamless warm white'},{key:'editorial',label:'Editorial',subtitle:'Natural, warm, minimal'},{key:'dark',label:'Dark luxury',subtitle:'Moody charcoal backdrop'}];
-const stages=['01 / INPUT','02 / SEGMENT','03 / ART DIRECTION','04 / OUTPUT'];
-export default function App(){
- const [file,setFile]=useState<File|null>(null),[preview,setPreview]=useState(''),[garment,setGarment]=useState('clothing item'),[preset,setPreset]=useState('studio'),[prompt,setPrompt]=useState(''),[edge,setEdge]=useState(2),[job,setJob]=useState<Job|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const fileRef=useRef<HTMLInputElement>(null);
- useEffect(()=>{if(!job||!['queued','segmenting','queued_generation','generating'].includes(job.status))return;const t=window.setInterval(async()=>{try{const r=await fetch('/api/jobs/'+job.job_id);const result=await r.json();setJob(result);if(result.status==='error')setError(result.error||'Unknown error')}catch{setError('Unable to contact the backend')}},1600);return()=>clearInterval(t)},[job?.job_id,job?.status]);
- const segment=async()=>{if(!file)return;setBusy(true);setError('');setJob(null);try{const body=new FormData();body.append('file',file);body.append('garment',garment);const r=await fetch('/api/segment',{method:'POST',body});const data=await r.json();if(!r.ok)throw Error(data.detail||'Segmentation failed');setJob({job_id:data.job_id,status:'queued'})}catch(e){setError(String(e))}finally{setBusy(false)}};
- const generate=async()=>{if(!job)return;setBusy(true);setError('');try{const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:job.job_id,preset,prompt,edge_protection:edge})});const data=await r.json();if(!r.ok)throw Error(data.detail||'Generation failed');setJob({...job,status:'queued_generation',result_url:undefined})}catch(e){setError(String(e))}finally{setBusy(false)}};
- const select=(f?:File)=>{if(!f)return;setFile(f);setPreview(URL.createObjectURL(f));setJob(null);setError('')};
- const uploading=busy||job?.status==='queued'||job?.status==='segmenting';const rendering=job?.status==='queued_generation'||job?.status==='generating';const ready=job?.status==='mask_ready'||job?.status==='complete';
- return <div className="app"><header><a className="brand" href="/">SARTIQ <span className="brand-slash">/</span> <span className="brand-small">CATALOGUE STUDIO</span></a><span className="top-caption">AI PRODUCT PHOTOGRAPHY <span className="live">● PROTOTYPE</span></span></header>
- <main><div className="intro"><div><p className="eyebrow">THE DIGITAL PHOTO STUDIO · HACKATHON EDITION</p><h1>From phone photo<br/>to <em>photoshoot.</em></h1><p className="lede">One piece of clothing. Infinite creative directions. Preserve the product, transform the setting.</p></div><div className="intro-tag"><Camera size={22}/><div>UPLOAD → ISOLATE → STYLE → EXPORT</div></div></div>
- <div className="steps">{stages.map((s,i)=><div key={s} className={'step '+((i===0&&file)||(i===1&&job?.garment_mask)||(i===2&&ready)||(i===3&&job?.result_url)?'active':'')}>{s}</div>)}</div>
- <div className="workspace"><section className="controls"><div className="panel"><div className="panel-top"><span>01</span><h2>Source image</h2><Check size={17} className={file?'checked':'faint'}/></div><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={e=>select(e.target.files?.[0])}/><button className={'drop '+(preview?'has-file':'')} onClick={()=>fileRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();select(e.dataTransfer.files[0])}}>{preview?<><img src={preview}/><div className="image-cover">Change image</div></>:<><UploadCloud size={33}/><strong>Drop your garment image here</strong><span>or click to browse · JPEG, PNG, WebP</span></>}</button><label className="field-label">WHAT SHOULD WE ISOLATE?</label><input className="text-input" value={garment} onChange={e=>setGarment(e.target.value)} placeholder="e.g. red knit sweater"/><button className="primary" onClick={segment} disabled={!file||uploading||rendering}><Scissors size={17}/>{uploading?'Extracting garment…':'Extract garment mask'}<ArrowRight size={16}/></button></div>
- <div className="panel"><div className="panel-top"><span>02</span><h2>Art direction</h2><Sparkles size={17} className="faint"/></div><label className="field-label">SELECT AN ENVIRONMENT</label><div className="presets">{presets.map(p=><button key={p.key} className={'preset '+(preset===p.key?'selected':'')} onClick={()=>setPreset(p.key)}><span className={'preset-dot '+p.key}></span><span><strong>{p.label}</strong><small>{p.subtitle}</small></span>{preset===p.key&&<Check size={15}/>}</button>)}</div><label className="field-label">CUSTOM DIRECTION <span>OPTIONAL</span></label><textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="e.g. soft morning light, subtle shadows…" rows={3}/><div className="slider-label"><label className="field-label">GARMENT EDGE PROTECTION</label><span>{edge}px</span></div><input type="range" min="0" max="12" value={edge} onChange={e=>setEdge(+e.target.value)}/><p className="hint">Higher values protect more of the original garment edge. The white mask area is regenerated.</p><button className="primary generate" onClick={generate} disabled={!ready||busy||!!rendering}><Sparkles size={17}/>{rendering?'Creating photo…':'Generate catalogue photo'}<ArrowRight size={16}/></button></div></section>
- <section className="results"><div className="results-heading"><div><p className="eyebrow">LIVE PRODUCTION VIEW</p><h2>Production board</h2></div><span className="status">{job?.status?.replaceAll('_',' ')||'AWAITING INPUT'}</span></div><div className="image-grid"><div className="image-card"><div className="image-area">{preview?<img src={job?.image||preview}/>:<div className="placeholder"><Camera size={30}/><span>Source photograph</span></div>}</div><div className="image-caption"><span>01 / ORIGINAL</span><span>USER CAPTURE</span></div></div><div className="image-card"><div className="image-area checker">{job?.garment_mask?<img className="mask" src={job.garment_mask}/>:<div className="placeholder"><Scissors size={30}/><span>Awaiting segmentation</span></div>}</div><div className="image-caption"><span>02 / OBJECT MASK</span><span>{job?.garment_mask?'GARMENT = WHITE':'SAM 3.1'}</span></div></div><div className="image-card"><div className="image-area checker">{job?.background_mask?<img className="mask" src={job.background_mask}/>:<div className="placeholder"><Layers size={30}/><span>Background edit region</span></div>}</div><div className="image-caption"><span>03 / EDIT MASK</span><span>{job?.background_mask?'BACKGROUND = WHITE':'INVERT MASK'}</span></div></div><div className="image-card final-card"><div className="image-area">{job?.result_url?<img src={job.result_url}/>:<div className="placeholder"><Sparkles size={30}/><span>{rendering?'Generating studio shot…':'Final image appears here'}</span></div>}</div><div className="image-caption"><span>04 / FINAL OUTPUT</span><span>FLUX FILL</span></div></div></div>{error&&<div className="error">{error}</div>}{job?.result_url&&<a className="download" href={job.result_url} target="_blank" rel="noreferrer"><Download size={16}/> Open generated photo (save image)</a>}<div className="bottom-note"><RefreshCw size={15}/> A generation model can change fabric appearance or edge details. Always compare against the source before commercial use.</div></section></div></main><footer><span>CATALOGUE STUDIO — PROOF OF CONCEPT</span><span>POWERED BY FAL · SAM 3.1 · FLUX.1 FILL</span></footer></div>
+import {useEffect, useRef, useState} from 'react';
+import {Camera, UploadCloud, Sparkles, Download, ArrowRight} from 'lucide-react';
+
+type Job = {job_id: string; status: string; result_url?: string; error?: string};
+const finished = ['complete', 'review_required', 'error'];
+
+export default function App() {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState('');
+  const [job, setJob] = useState<Job | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  const requestLock = useRef(false);
+  const busy = submitting || !!(job && !finished.includes(job.status));
+
+  useEffect(() => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  useEffect(() => {
+    if (!job || finished.includes(job.status)) return;
+    const controller = new AbortController();
+    let stopped = false;
+    let timer: number;
+    const poll = async () => {
+      try {
+        const response = await fetch('/api/jobs/' + job.job_id, {signal: controller.signal});
+        const data = await response.json();
+        if (!response.ok) throw Error(data.detail || 'Impossibile leggere il risultato');
+        if (stopped) return;
+        setJob(data);
+        setError(data.status === 'error' ? data.error : '');
+        if (finished.includes(data.status)) return;
+      } catch (e) {
+        if (stopped) return;
+        setError('Connessione interrotta. Riprovo a recuperare il risultato…');
+      }
+      timer = window.setTimeout(poll, 1800);
+    };
+    void poll();
+    return () => {stopped = true; controller.abort(); window.clearTimeout(timer);};
+  }, [job?.job_id]);
+
+  const select = (next?: File) => {
+    if (!next || busy) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(next.type) || next.size > 12_000_000) {
+      setError('Scegli una foto JPG, PNG o WebP fino a 12 MB.'); return;
+    }
+    setFile(next); setJob(null); setError('');
+  };
+  const generate = async () => {
+    if (!file || busy || requestLock.current) return;
+    requestLock.current = true;
+    setSubmitting(true); setJob(null); setError('');
+    try {
+      const body = new FormData(); body.append('file', file);
+      const response = await fetch('/api/studio', {method: 'POST', body});
+      const data = await response.json();
+      if (!response.ok) throw Error(data.detail || 'Impossibile avviare la generazione');
+      setJob({job_id: data.job_id, status: 'queued'});
+    } catch (e) {setError(e instanceof Error ? e.message : String(e));}
+    finally {setSubmitting(false); requestLock.current = false;}
+  };
+
+  return <div className="app">
+    <header><a className="brand" href="/">SARTIQ <span className="brand-slash">/</span> <span className="brand-small">CATALOGUE STUDIO</span></a></header>
+    <main>
+      <div className="intro"><div><p className="eyebrow">IL TUO STUDIO FOTOGRAFICO</p><h1>Da una foto qualsiasi<br/>al tuo <em>catalogo.</em></h1><p className="lede">Sfondo bianco, luce da studio e un capo disposto con cura. Carica la foto: al resto pensiamo noi.</p></div></div>
+      <div className="workspace">
+        <section className="controls"><div className="panel">
+          <h2>La tua foto</h2>
+          <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={e => select(e.target.files?.[0])}/>
+          <button className={'drop ' + (preview ? 'has-file' : '')} disabled={busy} onClick={() => input.current?.click()} onDragOver={e => e.preventDefault()} onDrop={e => {e.preventDefault(); select(e.dataTransfer.files[0]);}}>
+            {preview ? <><img src={preview} alt="Foto caricata"/><div className="image-cover">Cambia foto</div></> : <><UploadCloud size={33}/><strong>Trascina qui la foto del capo</strong><span>oppure clicca · JPG, PNG, WebP · max 12 MB</span></>}
+          </button>
+          <p className="hint">Un solo capo ben visibile, con stampe e dettagli a fuoco.</p>
+          <button className="primary generate" onClick={generate} disabled={!file || busy}><Sparkles size={17}/>{busy ? 'Creo la tua foto…' : 'Crea foto da catalogo'}<ArrowRight size={16}/></button>
+          <p className="hint">L’elaborazione può richiedere alcuni minuti.</p>
+        </div></section>
+        <section className="results" aria-live="polite">
+          <div className="results-heading"><h2>Prima e dopo</h2><span className="status">{busy ? 'IN ELABORAZIONE' : job?.result_url ? 'PRONTA' : 'CARICA UNA FOTO'}</span></div>
+          <div className="image-grid">
+            <div className="image-card"><div className="image-area">{preview ? <img src={preview} alt="Prima: foto originale"/> : <div className="placeholder"><Camera size={30}/><span>La tua foto originale</span></div>}</div><div className="image-caption">PRIMA</div></div>
+            <div className="image-card"><div className="image-area">{job?.result_url ? <img src={job.result_url} alt="Dopo: capo su sfondo bianco da studio"/> : <div className="placeholder"><Sparkles size={30}/><span>{busy ? 'Prepariamo il tuo scatto da studio…' : 'La foto da catalogo apparirà qui'}</span></div>}</div><div className="image-caption">DOPO</div></div>
+          </div>
+          {error && <div className="error" role="alert">{error}</div>}
+          {job?.result_url && <><a className="download" href={job.result_url} target="_blank" rel="noreferrer"><Download size={16}/>Apri la foto finale</a><p className="hint">{job.status === 'review_required' ? 'Controlla la resa dei colori rispetto al capo originale. ' : ''}Confronta sempre scritte, stampe e dettagli prima di pubblicare.</p></>}
+        </section>
+      </div>
+    </main><footer><span>SARTIQ — CATALOGUE STUDIO</span><span>DAL TUO CAPO ALLO SCATTO DA STUDIO</span></footer>
+  </div>;
 }

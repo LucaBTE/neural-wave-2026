@@ -4,3 +4,5 @@ backend/.env
 frontend/node_modules/
 frontend/dist/
 .pytest_cache/
+validation/
+frontend/tsconfig.tsbuildinfo
