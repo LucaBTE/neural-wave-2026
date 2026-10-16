@@ -188,5 +188,5 @@ def test_ref_mask_is_garment_specific(tmp_path):
     (md / "g1").mkdir(parents=True)
     Image.new("L", (10, 10), 255).save(md / "g1" / "front.png")
     Image.new("L", (10, 10), 255).save(md / "front.png")  # legacy flat file must not leak
-    assert resolve_ref_mask("refs/g1/front.jpg", md, garment="g1", view="front").endswith("g1/front.png")
+    assert resolve_ref_mask("refs/g1/front.jpg", md, garment="g1", view="front") == str(md / "g1" / "front.png")
     assert resolve_ref_mask("refs/g2/front.jpg", md, garment="g2", view="front") is None

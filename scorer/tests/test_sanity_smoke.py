@@ -1,4 +1,4 @@
-"""Smoke test for the acceptance (sanity) suite entry points (owner C).
+"""Smoke test for the acceptance (sanity) suite entry points.
 
 Keeps the plumbing honest — the transforms, the worker and the report writer —
 without needing the full 97-reference run.  Real weights are required, so the

@@ -1,7 +1,7 @@
 """Public API: :func:`score_pair` and the model-caching :class:`Scorer`.
 
-Owner: worker B.  This is the only module that touches the filesystem and the
-segmentation/alignment modules of owner A; everything downstream
+This is the only module that touches the filesystem and the
+segmentation/alignment modules; everything downstream
 (:mod:`~sartiq_score.metrics`, :mod:`~sartiq_score.aggregate`) is pure.
 
 ``Scorer`` loads LPIPS + OpenCLIP once, pins torch's thread count and
@@ -221,7 +221,7 @@ class Scorer:
         if clip_path:
             versions["clip_sha256"] = _sha256_path(clip_path)
 
-        # --- segmenter identity (owner A) ---
+        # --- segmenter identity ---
         try:
             from . import segment as _seg  # noqa: PLC0415
 

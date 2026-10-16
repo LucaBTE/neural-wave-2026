@@ -143,3 +143,44 @@ def test_leaderboard_unicode_team_name_round_trips(tmp_path):
         got = list(csv.DictReader(fh))
     assert got[0]["team"] == "Équipe,東京"
     assert got[0]["rank"] == "1"
+
+
+# --------------------------------------------------------------------------- #
+# v2.3: fail before scoring when the dataset root or the model cache is wrong
+# --------------------------------------------------------------------------- #
+
+def test_missing_target_exits_2_naming_root_and_path(dataset, tmp_path):
+    """A wrong --dataset must exit 2 with the resolved root, not score zeros."""
+    info = dataset
+    holdout, preds = _holdout_and_preds(info, tmp_path)
+    empty = tmp_path / "empty_dataset"
+    empty.mkdir()
+    proc = _mock.run_cmd(["scripts/eval_val.py", "--pairs", holdout / "val.jsonl",
+                          "--preds", preds, "--team", "identity", "--out", tmp_path / "o",
+                          "--dataset", empty, "--limit", "1"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "dataset target missing" in proc.stderr
+    assert "resolved dataset root" in proc.stderr
+    assert str(empty.resolve()) in proc.stderr
+    assert not (tmp_path / "o" / "summary.json").exists()
+
+
+def test_scorer_setup_failure_exits_2(dataset, tmp_path, monkeypatch, capsys):
+    """A model-cache/proxy failure must abort with exit 2 and explain why."""
+    info = dataset
+    holdout, preds = _holdout_and_preds(info, tmp_path)
+
+    def boom():
+        raise RuntimeError("no route to host")
+
+    monkeypatch.setattr(eval_val, "_import_scorer_setup",
+                        lambda: (boom, tmp_path / "models_cache"))
+    rc = eval_val.main(["--pairs", str(holdout / "val.jsonl"), "--preds", str(preds),
+                        "--team", "identity", "--out", str(tmp_path / "o"), "--limit", "1"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "Scorer setup failed" in err
+    assert "no route to host" in err
+    assert "Model cache:" in err
+    assert "No results were produced." in err
+

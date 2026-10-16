@@ -13,22 +13,34 @@ the frozen contract and `ACCEPTANCE.md` summarises how the scorer was tested.
 Python 3.11 or newer. Use the repository quickstart environment: a CPU-only venv at the repository
 root, `.venv`. Run every command in this file from the repository root.
 
+Bash / zsh / macOS / WSL2:
+
 ```bash
 uv venv --python 3.12
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-uv pip install -e 'scorer[test]'
+uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
+uv pip install --python .venv -e 'scorer[test]'
 ```
 
-To use the scorer on its own, a venv at `scorer/.venv` works too, created the same way with
-`uv venv .venv --python 3.12` and `uv pip install -e '.[test]'` from `scorer/`.
+PowerShell (native Windows), the same steps, one command per line:
 
-Always run with a clean import path so the package resolves to this checkout. After the quickstart
-the first example pair is on disk, so this command runs as written:
+```powershell
+uv venv --python 3.12
+uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
+uv pip install --python .venv -e 'scorer[test]'
+```
+
+The `uv venv` line creates `.venv` once: if `.venv` already exists, skip it or rebuild it with
+`uv venv --python 3.12 --clear .venv`. `--python .venv` makes the installs target that environment
+even when another venv or a Conda environment is active.
+
+To use the scorer on its own, a venv at `scorer/.venv` works too, created the same way with
+`uv venv .venv --python 3.12` and `uv pip install --python .venv -e '.[test]'` from `scorer/`.
+
+After the quickstart the first example pair is on disk, so this command runs as written (on native
+Windows, `.venv\Scripts\python.exe` replaces `.venv/bin/python`):
 
 ```bash
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli pair \
-    --ref ../sartiq_neural_wave_2026/train/t0001/target.jpg \
-    --sub ../sartiq_neural_wave_2026/train/t0001/input_1.jpg
+.venv/bin/python -m sartiq_score.cli pair --ref ../sartiq_neural_wave_2026/train/t0001/target.jpg --sub ../sartiq_neural_wave_2026/train/t0001/input_1.jpg
 ```
 
 ### Model bundle
@@ -44,10 +56,17 @@ All weights live in `scorer/.models/` and are addressed through `TORCH_HOME`, `H
 | semantic | OpenCLIP `ViT-B-32` / `openai` | `.models/open_clip/` |
 | segmentation | rembg `u2net` (ONNX, CPU) | `.models/u2net/` |
 
-The first `Scorer()` construction downloads anything missing (about 1.2 GB). After that the directory
-is self-contained and can be copied to an offline judging box. `ScoreReport.versions` carries the
-package version, the model ids and the SHA-256 of each weight file, so a published score can be tied
-to exact weights.
+The first `Scorer()` construction downloads anything missing (about 1 GB; expect about 35 to 55 s for
+the first pair, including the download). After that the directory is self-contained and can be copied
+to an offline judging box. `ScoreReport.versions` carries the package version, the model ids and the
+SHA-256 of each weight file, so a published score can be tied to exact weights.
+
+If you already export `TORCH_HOME`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `U2NET_HOME` or
+`XDG_CACHE_HOME`, those take precedence over the default `scorer/.models`. To keep every weight in
+one place, set `SCORER_MODEL_DIR` to a single writable directory and unset the others.
+
+The test suite (`pytest` from `scorer/`) includes model-backed tests; they skip unless the weights
+are available, so point `SCORER_MODEL_DIR` at a populated cache to run them.
 
 ```json
 {"clip_model": "ViT-B-32/openai", "clip_sha256": "e6d1bd...",
@@ -61,25 +80,20 @@ Syntax for each sub-command below. These are templates, not literal commands: `R
 see section 1, section 3 and section 5.
 
 ```
-python -m sartiq_score.cli pair   --ref REF --sub SUB [--view VIEW] [--json]
-                                  [--ref-mask-dir DIR] [--no-cache]
-python -m sartiq_score.cli batch  (--refs DIR | --manifest FILE.jsonl) [--subs DIR]
-                                  --out OUT [--jobs N] [--debug-sheets] [--limit N]
-                                  [--ref-mask-dir DIR]
-python -m sartiq_score.cli sanity --refs-glob 'GLOB[,GLOB]' --out OUT [--limit N]
-                                  [--seed N] [--jobs N] [--families LIST] [--wrong N]
-                                  [--max-side N] [--timeout N] [--no-keep-variants]
-python -m sartiq_score.cli debug  --ref REF --sub SUB --out SHEET.jpg [--view VIEW]
+.venv/bin/python -m sartiq_score.cli pair   --ref REF --sub SUB [--view VIEW] [--json] [--ref-mask-dir DIR] [--no-cache]
+.venv/bin/python -m sartiq_score.cli batch  (--refs DIR | --manifest FILE.jsonl) [--subs DIR] --out OUT [--jobs N] [--debug-sheets] [--limit N] [--ref-mask-dir DIR]
+.venv/bin/python -m sartiq_score.cli sanity --refs-glob 'GLOB[,GLOB]' --out OUT [--limit N] [--seed N] [--jobs N] [--families LIST] [--wrong N] [--max-side N] [--timeout N] [--no-keep-variants]
+.venv/bin/python -m sartiq_score.cli debug  --ref REF --sub SUB --out SHEET.jpg [--view VIEW]
 ```
+
+On native Windows, `.venv\Scripts\python.exe` replaces `.venv/bin/python` throughout.
 
 `uv` also installs a `sartiq-score` console script with the same sub-commands.
 
 The v1 wrapper `sartiq_scorer.py` keeps the old flags and prints the v2 report:
 
 ```bash
-env -u PYTHONPATH .venv/bin/python scorer/sartiq_scorer.py \
-    --reference ../sartiq_neural_wave_2026/train/t0001/target.jpg \
-    --generated ../sartiq_neural_wave_2026/train/t0001/input_1.jpg --view front
+.venv/bin/python scorer/sartiq_scorer.py --reference ../sartiq_neural_wave_2026/train/t0001/target.jpg --generated ../sartiq_neural_wave_2026/train/t0001/input_1.jpg --view front
 # add --json to print the full report (the LPIPS banner prints before it)
 ```
 
@@ -110,8 +124,7 @@ you run the command (the repository root, so the dataset next to the repo is `..
 
 ```jsonl
 {"garment_id": "t0001", "view": "front", "ref": "../sartiq_neural_wave_2026/train/t0001/target.jpg"}
-{"garment_id": "t0002", "view": "front", "ref": "../sartiq_neural_wave_2026/train/t0002/target.jpg",
- "submission": "predictions/t0002/front.png"}
+{"garment_id": "t0002", "view": "front", "ref": "../sartiq_neural_wave_2026/train/t0002/target.jpg", "submission": "predictions/t0002/front.png"}
 ```
 
 - `garment_id` (aliases `garment`, `id`, `gid`, `name`) and `ref` (aliases `reference`, `ref_path`,
@@ -122,8 +135,7 @@ you run the command (the repository root, so the dataset next to the repo is `..
   as a single team named `manifest`.
 
 ```bash
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli batch \
-    --manifest val_out/val_manifest.jsonl --out val_out
+.venv/bin/python -m sartiq_score.cli batch --manifest val_out/val_manifest.jsonl --out val_out
 ```
 
 `val_out/val_manifest.jsonl` is written by `scripts/eval_val.py` and already has the
@@ -176,7 +188,7 @@ They are not fitted to submitted work.
 | status | when |
 |---|---|
 | `invalid` | unreadable or corrupt file, min side under 256 px, max side over 12000 px, aspect over 3:1, decompression bomb (header over 150 MPix), file over 100 MB, animated or multi-frame, a symlinked file in a team tree, or a flat-field submission (whole-image luma standard deviation under 4/255, reason `blank_or_uniform`). Score 0. |
-| `review` | any of `mask_empty`, `mask_suspect`, `truncated` on the submission, `multi_component` on the submission while the reference is single, or a clip sub-score under 0.30 |
+| `review` | any of `mask_empty`, `mask_suspect`, `truncated` on the reference or the submission, `multi_component` on the submission while the reference is single, or a clip sub-score under 0.30 |
 | `ok` | none of the above |
 
 `review` entries keep their score; a human checks them before publishing. Model uncertainty is never
@@ -188,9 +200,13 @@ The sanity suite spawns `pair` subprocesses with the working directory set to `s
 relative reference glob resolves in the parent but not in those subprocesses. Pass an absolute glob:
 
 ```bash
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli sanity \
-    --refs-glob "$(realpath ../sartiq_neural_wave_2026)/train/*/target.jpg" \
-    --out sanity_out --limit 15 --jobs 6
+.venv/bin/python -m sartiq_score.cli sanity --refs-glob "$(cd ../sartiq_neural_wave_2026 && pwd)/train/*/target.jpg" --out sanity_out --limit 15 --jobs 1
+```
+
+PowerShell (native Windows; pass an absolute glob):
+
+```powershell
+.venv\Scripts\python.exe -m sartiq_score.cli sanity --refs-glob "C:/path/to/sartiq_neural_wave_2026/train/*/target.jpg" --out sanity_out --limit 15 --jobs 1
 ```
 
 This is a diagnostic, not a pass/fail gate. On the frozen release the suite reports a small set of
@@ -237,8 +253,10 @@ across processes; `--max-side N` downscales inputs for faster iteration.
 - One segmenter for everyone. rembg `u2net` is not garment-specific; white, cream, lace and
   thin-strap garments are the known weak spot. Reference masks can be hand-fixed with `--ref-mask-dir`
   (PNG with the same stem).
-- CPU speed. A single pair costs seconds warm; a full reference set times several teams is minutes,
-  not seconds, so use `--jobs`.
+- CPU speed. A single pair costs about 1.5 s warm on an idle 4-core CPU, up to about 4 s when the
+  CPU is busy; a full reference set times several teams is minutes, not seconds. Start with
+  `--jobs 1` (each worker loads its own models, about 1.4 GB of RAM each) and raise it once the
+  models are cached.
 - Cross-platform repeatability is not bit-exact. Threads are pinned (`torch.set_num_threads(4)`),
   models run in eval plus `inference_mode`, and deterministic algorithms are requested. The guarantee
   is repeatability within this pinned environment, with numerical tolerance elsewhere.

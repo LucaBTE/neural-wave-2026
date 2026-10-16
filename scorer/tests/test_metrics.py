@@ -1,13 +1,13 @@
-"""Tests for worker B: metrics, aggregate policy, and the public api glue.
+"""Tests for metrics, aggregate policy, and the public api glue.
 
 Synthetic :class:`Canon` objects are built directly from arrays so the tests do
-not depend on segmentation/alignment (owner A).  A couple of tests use real
+not depend on segmentation/alignment.  A couple of tests use real
 packshots from ``../dataset/*/out.jpg`` resized to the canonical 512x384 canvas
 to exercise LPIPS/CLIP.
 
 Run with::
 
-    env -u PYTHONPATH .venv/bin/python -m pytest tests/test_metrics.py -v
+    .venv/bin/python -m pytest tests/test_metrics.py -v
 """
 
 from __future__ import annotations

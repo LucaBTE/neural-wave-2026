@@ -1,4 +1,4 @@
-"""Garment segmentation (owner A).
+"""Garment segmentation.
 
 Frozen policy (SPEC.md "Preprocessing"): ONE model for everyone -- ``rembg``
 ``u2net`` (ONNX CPU), session created once.  Feed the composited RGB.  Output a

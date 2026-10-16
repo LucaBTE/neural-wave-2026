@@ -1,4 +1,4 @@
-"""Canonical alignment (owner A).
+"""Canonical alignment.
 
 Contract: ``canonicalize(loaded, mask) -> Canon`` (see :mod:`sartiq_score.types`).
 

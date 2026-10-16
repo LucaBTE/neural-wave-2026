@@ -4,8 +4,11 @@
 Checks the fixed layout ``<submissions>/<team>/<garment_id>/front.<ext>`` against the
 dataset ids and the image rules the frozen scorer enforces.
 
-    .venv/bin/python scripts/make_submission.py --submissions submissions
-    .venv/bin/python scripts/make_submission.py --submissions submissions --team ghostbusters --zip
+    python scripts/make_submission.py --submissions submissions
+    python scripts/make_submission.py --submissions submissions --team ghostbusters --zip
+
+Run it with the same interpreter that has the scorer installed (the repo's
+virtualenv interpreter); the error message below prints the exact one to use.
 
 Checks:
   * garment ids match the dev/test ``inputs.jsonl`` ids: an unknown id is an error; a
@@ -100,7 +103,7 @@ def require_frozen_scorer() -> None:
         "(sartiq_score.io, sartiq_score.aggregate and sartiq_score.batch) so its checks match "
         f"official scoring, but the import failed: {_scorer_import_error}\n"
         "Run it with the repo's interpreter and the scorer importable, e.g.:\n"
-        "  env -u PYTHONPATH .venv/bin/python scripts/make_submission.py ...\n"
+        f'  "{sys.executable}" scripts/make_submission.py ...\n'
         "There is no Pillow fallback on purpose: a decode that disagrees with the "
         "scorer could silently pass files the event rejects.",
         file=sys.stderr,
@@ -124,7 +127,7 @@ def load_dataset_ids(dataset_root: Path) -> dict[str, set[str]]:
         ids: set[str] = set()
         manifest = dataset_root / split / "inputs.jsonl"
         if manifest.is_file():
-            for lineno, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), start=1):
+            for lineno, line in enumerate(manifest.read_text(encoding="utf-8-sig").splitlines(), start=1):
                 text = line.strip()
                 if not text or text.startswith("#"):
                     continue

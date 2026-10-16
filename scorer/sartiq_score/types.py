@@ -1,7 +1,7 @@
 """Frozen data contract for the Sartiq reference-similarity scorer (v2).
 
-Owner: worker A.  Field names in ``Loaded``, ``Canon`` and ``ScoreReport`` are
-FROZEN by SPEC.md -- workers B and C import them.  Do not rename or reorder.
+Field names in ``Loaded``, ``Canon`` and ``ScoreReport`` are FROZEN by SPEC.md --
+every other module imports them.  Do not rename or reorder.
 
 Only additive, defaulted fields may be introduced after the freeze.
 """

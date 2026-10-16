@@ -1,6 +1,6 @@
 """Pure metric functions on canonical (:class:`~sartiq_score.types.Canon`) pairs.
 
-Owner: worker B.  Every function here is a *pure* function of its inputs plus an
+Every function here is a *pure* function of its inputs plus an
 optional pre-loaded :class:`MetricContext` (which only wraps already-initialised,
 deterministic torch/OpenCLIP/LPIPS models).  Given the same inputs they must
 return the same numbers, so no module-level mutable state lives here.

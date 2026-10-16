@@ -113,8 +113,9 @@ No learned hard caps.
   whole-image Rec.601 luma standard deviation under 4.0 on the 0..255 scale (`UNIFORM_LUMA_STD`); its
   reason is `blank_or_uniform`, and `raw` carries `invalid_reason` and `invalid_detail`.
 - `review` (score kept, a human checks it): `mask_empty`, `mask_suspect`, `truncated` on the
-  submission (the mask touches a border over more than 10 % of that side), `multi_component` on the
-  submission while the reference is single, or a clip sub-score under 0.30 (`CLIP_REVIEW_THRESHOLD`).
+  reference or the submission (a truncated mask touches a border over more than 10 % of that side),
+  `multi_component` on the submission while the reference is single, or a clip sub-score under 0.30
+  (`CLIP_REVIEW_THRESHOLD`).
 - `ok`: none of the above.
 
 Raw values and every sub-score are always reported.

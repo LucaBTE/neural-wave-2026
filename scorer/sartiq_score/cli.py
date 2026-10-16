@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Command-line interface for the Sartiq reference-similarity scorer (v2).
 
-Owner: worker C.
-
 Usage
 -----
 ::
@@ -16,7 +14,7 @@ Usage
 
 The CLI only talks to the frozen public surface: ``api.score_pair``,
 ``api.Scorer`` and ``types.ScoreReport``.  Everything here is presentation and
-event plumbing; the scoring policy lives in ``aggregate`` (owner B).
+event plumbing; the scoring policy lives in ``aggregate``.
 """
 
 from __future__ import annotations
@@ -90,7 +88,7 @@ def report_to_dict(report: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Scorer access (owner B's api)
+# Scorer access (the api module)
 # ---------------------------------------------------------------------------
 
 
@@ -337,7 +335,16 @@ def _cmd_sanity(args: argparse.Namespace) -> int:
     )
     sanity.write_report(summary)
     print(sanity.render_console(summary))
-    return 0 if summary["n_failed"] == 0 else 1
+    if not summary.get("run_ok", summary["n_failed"] == 0):
+        if not summary["n_checks"]:
+            print("error: the sanity suite produced no checks -- this is not a pass "
+                  "(see the notes in the report)", file=sys.stderr)
+        if summary.get("n_garments_failed"):
+            print(f"error: {summary['n_garments_failed']}/"
+                  f"{summary.get('n_garments_requested')} garments failed to run",
+                  file=sys.stderr)
+        return 1
+    return 0
 
 
 def _cmd_debug(args: argparse.Namespace) -> int:

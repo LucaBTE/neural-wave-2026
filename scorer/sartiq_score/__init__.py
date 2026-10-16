@@ -1,16 +1,16 @@
 """Sartiq reference-similarity scorer (v2).
 
-Public API (owner B, in ``api.py``)::
+Public API (``api.py``)::
 
     from sartiq_score import score_pair, Scorer
     report = score_pair("ref.jpg", "sub.png")
 
-Owner A (this module list): ``types``, ``io``, ``segment``, ``align``.
-Owner B: ``metrics``, ``aggregate``, ``api``.  Owner C: ``cli``, ``batch``,
-``sanity``, ``debug_sheet``.
+``types``, ``io``, ``segment`` and ``align`` are the preprocessing side;
+``metrics``, ``aggregate`` and ``api`` the scoring side; ``cli``, ``batch``,
+``sanity`` and ``debug_sheet`` the presentation/event side.
 
-``api`` is imported lazily (PEP 562) so that the preprocessing modules can be
-tested and used while ``api.py`` is still being written in parallel.
+``api`` is imported lazily (PEP 562) so the preprocessing modules can be used
+without pulling in torch.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ api = None  # placeholder replaced by the real submodule on first access
 
 
 def _get_api():
-    """Import (and cache) :mod:`sartiq_score.api` written by owner B."""
+    """Import (and cache) :mod:`sartiq_score.api`."""
     global api
     if api is None or not hasattr(api, "score_pair"):
         import importlib  # noqa: PLC0415

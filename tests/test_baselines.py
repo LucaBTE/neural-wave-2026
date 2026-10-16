@@ -258,3 +258,108 @@ def test_nanobanana_empty_model_is_rejected(dataset, tmp_path):
         assert proc.returncode != 0, (provider, repr(model), proc.stdout, proc.stderr)
         assert "model" in proc.stderr, (provider, repr(model), proc.stderr)
     assert not (out / "_requests").exists()
+
+
+# --------------------------------------------------------------------------- #
+# v2.3: only transient failures are retried; a successful retry clears the error
+# --------------------------------------------------------------------------- #
+
+def _tiny_png() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (12, 34, 56)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_nanobanana_does_not_retry_a_deterministic_error(dataset, tmp_path, monkeypatch, capsys):
+    """A 401 is deterministic: report it once instead of burning quota on retries."""
+    info = dataset
+    out = tmp_path / "preds"
+    calls = {"n": 0}
+
+    def boom(req, timeout=None):
+        calls["n"] += 1
+        body = json.dumps({"error": {"message": "invalid key"}}).encode()
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized",  # type: ignore[arg-type]
+                                     {}, io.BytesIO(body))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.delenv("IMAGE_API_KEY", raising=False)
+
+    rc = baseline_nanobanana.main([
+        "--manifest", str(info["root"] / "train" / "pairs.jsonl"),
+        "--out", str(out), "--team", "nb", "--limit", "1", "--retries", "3",
+    ])
+    capsys.readouterr()
+    assert rc == 1
+    assert calls["n"] == 1, "a deterministic error must not be retried"
+
+
+def test_nanobanana_retries_a_transient_error_and_clears_it(dataset, tmp_path, monkeypatch):
+    """A 503 is retried; the success must not leave an error in the run manifest."""
+    info = dataset
+    out = tmp_path / "preds"
+    calls = {"n": 0}
+    png = _tiny_png()
+
+    def flaky(url, body, key, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise baseline_nanobanana.TransientError("HTTP 503: busy")
+        return png
+
+    monkeypatch.setattr(baseline_nanobanana, "fal_generate", flaky)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.delenv("IMAGE_API_KEY", raising=False)
+
+    rc = baseline_nanobanana.main([
+        "--manifest", str(info["root"] / "train" / "pairs.jsonl"),
+        "--out", str(out), "--team", "nb", "--limit", "1", "--retries", "2",
+    ])
+    assert rc == 0
+    assert calls["n"] == 2
+    entry = json.loads((out / "_manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert entry["error"] is None
+    assert (out / "nb" / "t0001" / "front.png").is_file()
+
+
+def test_nanobanana_dry_run_payload_is_a_labelled_preview(dataset, tmp_path):
+    """The dry-run printout must call the payload a preview, not the wire request."""
+    info = dataset
+    out = tmp_path / "preds"
+    proc = _mock.run_cmd([
+        "baselines/baseline_nanobanana.py",
+        "--manifest", info["root"] / "train" / "pairs.jsonl",
+        "--out", out, "--team", "nb", "--limit", "1", "--dry-run",
+    ], env_extra={"FAL_KEY": "", "IMAGE_API_KEY": ""})
+    assert proc.returncode == 0, proc.stderr
+    assert "preview payload" in proc.stdout
+    assert "truncated" in proc.stdout
+    assert "nothing sent" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# v2.3: printed hint commands name the interpreter that is actually running
+# --------------------------------------------------------------------------- #
+
+def _names_running_interpreter(text: str) -> bool:
+    """True when a quoted path in the hint resolves to the interpreter running the tests."""
+    import os, re
+    want = os.path.realpath(sys.executable)
+    return any(os.path.realpath(m) == want for m in re.findall(r'"([^"]+)"', text))
+
+
+def test_printed_hints_name_the_running_interpreter(dataset, tmp_path):
+    info = dataset
+    holdout = tmp_path / "holdout"
+    proc = _mock.run_cmd(["scripts/make_holdout.py", "--pairs", info["root"] / "train" / "pairs.jsonl",
+                          "--frac", "0.5", "--seed", "0", "--out", holdout], check=True)
+    assert _names_running_interpreter(proc.stdout), proc.stdout
+
+    preds = tmp_path / "hint_preds"
+    proc = _mock.run_cmd(["baselines/baseline_identity.py", "--manifest", holdout / "val.jsonl",
+                          "--out", preds, "--team", "identity"], check=True)
+    assert _names_running_interpreter(proc.stdout), proc.stdout
+

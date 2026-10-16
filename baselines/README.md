@@ -24,9 +24,7 @@ and `test/`.
 ## Identity baseline, the floor
 
 ```bash
-.venv/bin/python baselines/baseline_identity.py \
-    --manifest ../sartiq_neural_wave_2026/train/pairs.jsonl \
-    --out predictions --team identity
+.venv/bin/python baselines/baseline_identity.py --manifest ../sartiq_neural_wave_2026/train/pairs.jsonl --out predictions --team identity
 ```
 
 Bytes are copied unchanged, so there is no re-encode loss. Point it at `dev/inputs.jsonl` with
@@ -35,33 +33,44 @@ score. Carve the holdout first (the quickstart in the top-level [README.md](../R
 [docs/DATA.md](../docs/DATA.md)):
 
 ```bash
-.venv/bin/python scripts/make_holdout.py \
-    --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/
-env -u PYTHONPATH .venv/bin/python scripts/eval_val.py \
-    --pairs holdout/val.jsonl --preds predictions --team identity --out val_out
+.venv/bin/python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/ --group-by-target
+.venv/bin/python scripts/eval_val.py --pairs holdout/val.jsonl --preds predictions --team identity --out val_out --jobs 1
 ```
+
+On native Windows, run `.venv\Scripts\python.exe` in place of `.venv/bin/python`.
 
 Some of its slots come back `status=review`, usually `truncated` (the raw capture cuts the garment
 at the frame edge) or `clip_low`. That is the scorer working as intended on unprocessed captures.
 
 ## Hosted image-edit baseline
 
-Provider-agnostic. The API key comes from the environment, never from this repo. The default
-provider is fal.
+Provider-agnostic. The API key comes from the environment, never from this repo, and a `.env` file
+is not read automatically. The default provider is fal.
+
+Check the inputs first: `--dry-run` writes the request payloads to `submissions/_requests/` and
+makes no network call, so it needs no key.
+
+```bash
+.venv/bin/python baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/dev/inputs.jsonl --out submissions --team hosted-edit --dry-run
+```
+
+To spend, set the key and drop `--dry-run`. Bash / zsh / macOS / WSL2:
 
 ```bash
 export FAL_KEY=...                 # the key you were given at kickoff
-
-.venv/bin/python baselines/baseline_nanobanana.py \
-    --manifest ../sartiq_neural_wave_2026/dev/inputs.jsonl \
-    --out submissions --team hosted-edit --dry-run
+.venv/bin/python baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/dev/inputs.jsonl --out submissions --team hosted-edit
 ```
 
-Run `--dry-run` first: it writes the request payloads to `submissions/_requests/` and makes no
-network call. Drop `--dry-run` to spend. On fal the default model is `google/nano-banana-2.1/edit`,
-so no `--model` is needed. An edit costs about $0.06, so a run over every dev garment is roughly
-$2. The key and its budget are for challenge work only; the top-level [README.md](../README.md) has
-the details.
+PowerShell (native Windows):
+
+```powershell
+$env:FAL_KEY = "..."
+.venv\Scripts\python.exe baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/dev/inputs.jsonl --out submissions --team hosted-edit
+```
+
+On fal the default model is `google/nano-banana-2.1/edit`, so no `--model` is needed. An edit costs
+about $0.06, so a run over every dev garment is roughly $2. The key and its budget are for challenge
+work only; the top-level [README.md](../README.md) has the details.
 
 Options that matter:
 

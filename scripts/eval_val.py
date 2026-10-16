@@ -7,13 +7,15 @@ scorer over the whole set. The output is the same ``leaderboard.csv`` / ``scores
 ``summary.json`` whose mean comes from the official, garment-weighted aggregate.
 
     # 1. carve a holdout out of the example pairs (see scripts/make_holdout.py)
-    python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl \\
-        --frac 0.1 --seed 0 --out holdout
+    python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout
 
     # 2. predict for the holdout and score it
     python baselines/baseline_identity.py --manifest holdout/val.jsonl --out predictions --team identity
-    env -u PYTHONPATH .venv/bin/python scripts/eval_val.py \\
-        --pairs holdout/val.jsonl --preds predictions --team identity --out val_out
+    python scripts/eval_val.py --pairs holdout/val.jsonl --preds predictions --team identity --out val_out
+
+Run both commands with the *same* interpreter that has the scorer installed
+(the repo's virtualenv interpreter). Any terminal prints the exact interpreter to
+use, so copy the command it prints rather than retyping the path.
 
 Required views are ``front`` unless a row carries a ``view`` field. A pair with no
 prediction is scored as a missing slot = 0, exactly like the real event. ``--dataset``
@@ -54,11 +56,17 @@ def _scorer_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "scorer"
 
 
-def _import_batch():
-    """Import the frozen batch module, failing with a clear message when it is absent."""
+def _ensure_scorer_path() -> str:
+    """Put the frozen scorer on ``sys.path`` (idempotent), or exit with guidance."""
     scorer_dir = str(_scorer_dir())
     if scorer_dir not in sys.path:
         sys.path.insert(0, scorer_dir)
+    return scorer_dir
+
+
+def _import_batch():
+    """Import the frozen batch module, failing with a clear message when it is absent."""
+    _ensure_scorer_path()
     try:
         from sartiq_score.batch import discover_subs, run_batch  # type: ignore
 
@@ -66,8 +74,24 @@ def _import_batch():
     except Exception as exc:  # noqa: BLE001
         raise SystemExit(
             f"error: could not import the scorer from {_scorer_dir()} ({exc}).\n"
-            "Run this script with the scorer environment and a clean import path:\n"
-            "  env -u PYTHONPATH .venv/bin/python scripts/eval_val.py ..."
+            "Run this script with the scorer environment and a clean import path, e.g.:\n"
+            f'  "{sys.executable}" scripts/eval_val.py ...'
+        )
+
+
+def _import_scorer_setup():
+    """``(build_scorer, MODEL_DIR)`` from the frozen scorer, or exit with guidance."""
+    _ensure_scorer_path()
+    try:
+        from sartiq_score import MODEL_DIR  # type: ignore
+        from sartiq_score.cli import build_scorer  # type: ignore
+
+        return build_scorer, MODEL_DIR
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            f"error: could not import the scorer from {_scorer_dir()} ({exc}).\n"
+            "Run this script with the scorer environment and a clean import path, e.g.:\n"
+            f'  "{sys.executable}" scripts/eval_val.py ...'
         )
 
 
@@ -77,7 +101,7 @@ def resolve_dataset_root(pairs: Path, explicit: str | None) -> Path:
     meta = pairs.parent / "meta.json"
     if meta.is_file():
         try:
-            recorded = json.loads(meta.read_text(encoding="utf-8")).get("dataset_root")
+            recorded = json.loads(meta.read_text(encoding="utf-8-sig")).get("dataset_root")
         except (OSError, ValueError):
             recorded = None
         if recorded:
@@ -93,7 +117,7 @@ def load_pairs(pairs: Path, dataset_root: Path) -> list[dict]:
     if not pairs.is_file():
         raise SystemExit(f"error: --pairs not found: {pairs}")
     rows: list[dict] = []
-    for lineno, line in enumerate(pairs.read_text(encoding="utf-8").splitlines(), start=1):
+    for lineno, line in enumerate(pairs.read_text(encoding="utf-8-sig").splitlines(), start=1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -239,12 +263,40 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     _discover_subs, run_batch = _import_batch()
+    build_scorer, model_dir = _import_scorer_setup()
 
     pairs_path = Path(args.pairs)
     dataset_root = resolve_dataset_root(pairs_path, args.dataset)
     pairs = load_pairs(pairs_path, dataset_root)
     if args.limit is not None:
         pairs = pairs[: max(0, args.limit)]
+
+    # Fail loudly *before* any scoring when the dataset root is wrong: a missing
+    # target would otherwise waste a long model run and read as legitimate zeros.
+    missing = [p["target"] for p in pairs if not Path(p["target"]).is_file()]
+    if missing:
+        print(
+            f"error: dataset target missing: {Path(missing[0]).resolve()}\n"
+            f"resolved dataset root: {dataset_root.resolve()}\n"
+            f'pass --dataset "/path/to/sartiq_neural_wave_2026" (that directory must '
+            f"directly contain train/, dev/ and test/; check for an extra ZIP folder).\n"
+            f"{len(missing)} of {len(pairs)} target(s) were not found.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Build the scorer once, in the parent, so a broken model cache / proxy fails
+    # here with exit 2 instead of turning into a run of invalid zero scores.
+    try:
+        build_scorer()
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"Scorer setup failed: {type(exc).__name__}: {exc}. "
+            f"Model cache: {Path(model_dir).expanduser().resolve()}. "
+            "Check network/proxy or write permission. No results were produced.",
+            file=sys.stderr,
+        )
+        return 2
 
     preds_root = Path(args.preds)
     if not preds_root.is_dir():

@@ -71,8 +71,9 @@ staff before you spend beyond it.
 
 ## How much budget do I get?
 Each team gets a fal.ai key with a $100 budget and an OpenCode Go key with a $10 budget, both for
-challenge work only, handed out at kickoff. A hosted image edit costs about $0.06. The budgets are
-per team and are not topped up unless staff say so; ask a staff member if you are unsure.
+challenge work only, handed out at kickoff. A hosted image edit costs about $0.06. No GPUs or GPU
+credits are provided. The budgets are per team and are not topped up unless staff say so; ask a
+staff member if you are unsure.
 
 ## Do I have to use OpenCode?
 No. The organisers suggest OpenCode (https://opencode.ai) as the coding harness and hand out an
@@ -89,10 +90,10 @@ Yes, the code you write is yours, and it is optional. Remember that a holdout yo
 longer an honest number, and that a model tuned to a few garments is not a capture protocol.
 
 ## Why did my score come back review?
-Something in the flags: `mask_empty`, `mask_suspect`, `truncated`, `multi_component` on your
-submission, or a `clip` sub-score below 0.30. It is not a penalty and not a rejection. The score is
-kept and a human checks it. The usual cause is a garment that silhouettes badly (white, cream or
-lace on a light background) or a clipped edge.
+Something in the flags: `mask_empty`, `mask_suspect`, `truncated` (on the reference or your
+submission), `multi_component` on your submission, or a `clip` sub-score below 0.30. It is not a
+penalty and not a rejection. The score is kept and a human checks it. The usual cause is a garment
+that silhouettes badly (white, cream or lace on a light background) or a clipped edge.
 
 ## My output looks great but scores badly. Is the scorer broken?
 Probably not. The scorer measures similarity to a specific reference photograph. A cleaner shot
@@ -101,14 +102,14 @@ Run the scorer's `debug` sub-command on the pair and inspect the contact sheet. 
 pair is always available and scores without any setup:
 
 ```bash
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli debug \
-    --ref ../sartiq_neural_wave_2026/train/t0001/target.jpg \
-    --sub ../sartiq_neural_wave_2026/train/t0001/input_1.jpg --out sheet_t0001.jpg
+.venv/bin/python -m sartiq_score.cli debug --ref ../sartiq_neural_wave_2026/train/t0001/target.jpg --sub ../sartiq_neural_wave_2026/train/t0001/input_1.jpg --out sheet_t0001.jpg
 ```
 
+On native Windows, run `.venv\Scripts\python.exe` in place of `.venv/bin/python`.
+
 ## How long does scoring take?
-About 3.3 s per pair warm on CPU, with a one-off ~10 s startup and a ~1.2 GB model download on
-first use. Use `--jobs 4`.
+About 1.5 to 4 s per pair warm on a 4-core CPU, with a one-off startup and a ~1 GB model download on
+first use. Start with `--jobs 1`; each worker loads its own models (about 1.4 GB of RAM each).
 
 ## What if my pipeline fails on one garment?
 Submit your best output anyway. A missing view or garment scores 0 and stays in the average; a

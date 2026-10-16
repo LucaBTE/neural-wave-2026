@@ -44,7 +44,7 @@ def resolve_dataset_root(manifest: Path, explicit: str | None) -> Path:
     meta = manifest.parent / "meta.json"
     if meta.is_file():
         try:
-            recorded = json.loads(meta.read_text(encoding="utf-8")).get("dataset_root")
+            recorded = json.loads(meta.read_text(encoding="utf-8-sig")).get("dataset_root")
         except (OSError, ValueError):
             recorded = None
         if recorded:
@@ -69,7 +69,7 @@ def load_rows(manifest: Path, dataset_root: Path) -> list[dict]:
     if not manifest.is_file():
         raise SystemExit(f"error: manifest not found: {manifest}")
     rows: list[dict] = []
-    for lineno, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), start=1):
+    for lineno, line in enumerate(manifest.read_text(encoding="utf-8-sig").splitlines(), start=1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n(dry run) {len(rows)} file(s) would be written under {out_root}")
         return 0
     print(f"identity baseline: {written} prediction(s) -> {out_root}")
-    print("score them with:  env -u PYTHONPATH .venv/bin/python scripts/eval_val.py "
+    print(f'score them with:  "{sys.executable}" scripts/eval_val.py '
           f"--pairs <val manifest> --preds {args.out} --team {args.team} --out val_out")
     return 0
 

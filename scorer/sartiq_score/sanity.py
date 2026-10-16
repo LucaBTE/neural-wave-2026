@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acceptance (sanity) suite for the Sartiq reference-similarity scorer (owner C).
+"""Acceptance (sanity) suite for the Sartiq reference-similarity scorer.
 
 Implements SPEC.md section **Acceptance**: monotonicity *within* families and a
 small set of published orderings — never absolute cross-family thresholds.
@@ -42,7 +42,6 @@ from __future__ import annotations
 import json
 import os
 import platform
-import resource
 import shutil
 import struct
 import subprocess
@@ -57,6 +56,31 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .cli import build_scorer, jsonable, score_with
 from .types import BG_RGB
+
+try:  # pragma: no cover - platform probe
+    import resource as _resource  # Unix only; absent on Windows
+except ImportError:  # Windows
+    _resource = None  # type: ignore[assignment]
+
+
+def _max_rss_kb(children: bool = False) -> int | None:
+    """Peak RSS in KiB, or ``None`` where the platform cannot report it.
+
+    ``resource`` is Unix-only (Windows has no equivalent), and Darwin reports
+    ``ru_maxrss`` in **bytes** while Linux/BSD report **KiB**, so a Darwin value
+    is divided down before it is labelled KiB.
+    """
+    if _resource is None:
+        return None
+    who = _resource.RUSAGE_CHILDREN if children else _resource.RUSAGE_SELF
+    try:
+        raw = int(_resource.getrusage(who).ru_maxrss)
+    except (OSError, ValueError):  # pragma: no cover - defensive
+        return None
+    if sys.platform == "darwin":
+        return raw // 1024
+    return raw
+
 
 COLOUR_SHIFTS = (2, 5, 10, 20)
 HUE_STEPS = (10, 20, 40)
@@ -338,6 +362,10 @@ def t_collage_swap(base: np.ndarray) -> np.ndarray:
     return np.concatenate([base[:, half:], base[:, :half]], axis=1)
 
 
+#: Known font files, tried in order.  Linux distro paths come first so a Linux host
+#: keeps picking exactly the font it always did; the macOS and Windows paths simply
+#: extend coverage to those platforms (on a clean container/runner none of them exist
+#: and the scalable built-in fallback below is used instead).
 _FONT_CANDIDATES = (
     "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -347,12 +375,39 @@ _FONT_CANDIDATES = (
     "/usr/share/fonts/google-droid-sans-fonts/DroidSans-Bold.ttf",
     "/usr/share/fonts/adwaita-sans-fonts/AdwaitaSans-Regular.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    # macOS
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    # Windows
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    # relative name resolved against Pillow's own search path
     "DejaVuSans-Bold.ttf",
 )
 
+#: Directories searched for any ``*.ttf`` when no named candidate exists.
+_FONT_GLOB_ROOTS = ("/usr/share/fonts", "/usr/local/share/fonts")
+
+#: Hard ceiling on the type size.  With a scalable font the grow loop converges far
+#: below this; the cap only ever stops a non-scaling fallback font from running the
+#: loop to an absurd size (the pre-fix path reached ~76561 px and blew up).
+_MAX_FONT_PX = 4096
+_MAX_STROKE_PX = 128
+
+
+def _system_font_paths() -> list[str]:
+    """Sorted ``*.ttf`` paths found under :data:`_FONT_GLOB_ROOTS` (may be empty)."""
+    import glob as _glob  # noqa: PLC0415
+
+    hits: list[str] = []
+    for root in _FONT_GLOB_ROOTS:
+        hits.extend(_glob.glob(f"{root}/**/*.ttf", recursive=True))
+    return sorted(hits)
+
 
 def _pick_font(size: int):
-    """A real TrueType font of *size* px, or Pillow's (tiny) bitmap fallback.
+    """A real TrueType font of *size* px, or Pillow's scalable built-in fallback.
 
     v2.1 bug fix: ``ImageFont.truetype("DejaVuSans-Bold.ttf", ...)`` resolves by
     filename only against Pillow's built-in search path, which does not exist on
@@ -360,24 +415,33 @@ def _pick_font(size: int):
     and drew a barely-visible caption in the background corner, so the
     text-overlay acceptance check measured nothing (0.1-1.3 points on all 15
     garments).  We now look for real absolute font paths first.
-    """
-    import glob as _glob  # noqa: PLC0415
 
+    v2.3 portability fix: on a host with no TrueType font at all (every clean
+    Linux container, the GitHub macOS runner, Windows) the fallback must still
+    honour *size*.  ``ImageFont.load_default()`` alone is size-locked, which made
+    the grow loop in :func:`t_text_overlay` run away; ``load_default(size=...)``
+    (Pillow >= 10.1) returns a scalable font.
+    """
+    clamped = max(1, min(int(size), _MAX_FONT_PX))
     for path in _FONT_CANDIDATES:
         try:
-            return ImageFont.truetype(path, int(size))
+            return ImageFont.truetype(path, clamped)
         except Exception:
             continue
     try:
-        hits = sorted(_glob.glob("/usr/share/fonts/**/*.ttf", recursive=True))
+        hits = _system_font_paths()
         for path in hits:
             if "Bold" in path or "Sans" in path:
-                return ImageFont.truetype(path, int(size))
+                return ImageFont.truetype(path, clamped)
         if hits:
-            return ImageFont.truetype(hits[0], int(size))
+            return ImageFont.truetype(hits[0], clamped)
     except Exception:
         pass
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default(size=clamped)
+    except TypeError:  # Pillow < 10.1 has no size argument
+        return ImageFont.load_default()
+
 
 
 def t_text_overlay(base: np.ndarray, mask: np.ndarray | None = None,
@@ -403,10 +467,18 @@ def t_text_overlay(base: np.ndarray, mask: np.ndarray | None = None,
     for _ in range(64):
         if tw * th >= target or tw >= 0.98 * w:
             break
-        size = int(size * 1.15) + 2
+        next_size = int(size * 1.15) + 2
+        if next_size > _MAX_FONT_PX:
+            next_size = _MAX_FONT_PX
+        if next_size <= size:  # capped: the size can no longer grow
+            break
+        prev = (tw, th)
+        size = next_size
         font = _pick_font(size)
         bbox = draw.textbbox((0, 0), text, font=font)
         tw, th = max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+        if (tw, th) == prev:  # font does not scale: stop instead of looping to the cap
+            break
 
     # --- place it on the garment -----------------------------------------
     if mask is not None:
@@ -428,7 +500,7 @@ def t_text_overlay(base: np.ndarray, mask: np.ndarray | None = None,
         luma = float(np.mean(0.299 * a[:, 0] + 0.587 * a[:, 1] + 0.114 * a[:, 2]))
         if luma < 128.0:  # dark garment -> light text
             fill, stroke_fill = (250, 250, 250), (10, 10, 10)
-    stroke = max(2, size // 14)
+    stroke = max(2, min(size // 14, _MAX_STROKE_PX))
     draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke, stroke_fill=stroke_fill)
     return np.asarray(img)
 
@@ -725,7 +797,7 @@ def garment_job(job: dict) -> dict:
         "records": records,
         "notes": notes,
         "seconds": round(time.perf_counter() - t_start, 3),
-        "peak_rss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "peak_rss_kb": _max_rss_kb(),
     }
 
 
@@ -988,7 +1060,7 @@ def measure_performance(ref: str, sub: str, scorer=None, warm_pairs: int = 3) ->
     cold_wall, cold_out = _run_cli_pair(ref, sub)
     result["cold_start_s"] = round(cold_wall, 3)
     result["cold_reported_s"] = cold_out.get("timing_s")
-    result["cold_rss_kb"] = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    result["cold_rss_kb"] = _max_rss_kb(children=True)
 
     threads = os.environ.get("SARTIQ_THREADS") or os.environ.get("OMP_NUM_THREADS")
     result["threads_env"] = threads
@@ -1010,7 +1082,7 @@ def measure_performance(ref: str, sub: str, scorer=None, warm_pairs: int = 3) ->
         result["n_warm"] = len(times)
     except Exception as exc:
         result["warm_error"] = f"{type(exc).__name__}: {exc}"
-    result["parent_peak_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    result["parent_peak_rss_kb"] = _max_rss_kb()
     return result
 
 
@@ -1058,6 +1130,13 @@ def render_console(summary: dict) -> str:
         lines.append(f"{fam['family']:<14}{fam['n']:>8}{fam['passed']:>8}{fam['failed']:>8}   {fail}")
     lines.append("-" * 72)
     lines.append(f"total checks {summary['n_checks']}   failed {summary['n_failed']}")
+    if summary.get("n_garments_failed"):
+        lines.append(
+            f"worker failures: {summary['n_garments_failed']}/"
+            f"{summary.get('n_garments_requested')} garments produced no checks"
+        )
+    if not summary["n_checks"]:
+        lines.append("ERROR: no checks ran -- this run is NOT a pass (see notes below)")
     if summary["failing_garments"]:
         lines.append(f"failing garments ({len(summary['failing_garments'])}): " + ", ".join(summary["failing_garments"]))
     if summary.get("performance"):
@@ -1086,7 +1165,7 @@ def write_report(summary: dict) -> dict:
     report_path = out_dir / "sanity_report.md"
     results_path = out_dir / "sanity_results.jsonl"
 
-    with open(results_path, "w") as fh:
+    with open(results_path, "w", encoding="utf-8") as fh:
         for rec in summary["records"]:
             fh.write(json.dumps(jsonable(rec), sort_keys=True) + "\n")
         for check in summary["checks"]:
@@ -1102,6 +1181,13 @@ def write_report(summary: dict) -> dict:
     lines.append(f"- seed {summary['seed']} | jobs {summary['jobs']} | families "
                  f"{', '.join(summary.get('requested_families') or [])}")
     lines.append(f"- total checks {summary['n_checks']} — **failed {summary['n_failed']}**")
+    if summary.get("n_garments_failed"):
+        lines.append(
+            f"- **worker failures: {summary['n_garments_failed']}/"
+            f"{summary.get('n_garments_requested')} garments produced no checks**"
+        )
+    if not summary["n_checks"]:
+        lines.append("- **ERROR: no checks ran — this report is not a pass**")
     lines.append("")
     lines.append("## Per-family results")
     lines.append("")
@@ -1183,7 +1269,7 @@ def write_report(summary: dict) -> dict:
     lines.append("```")
     lines.append("")
 
-    report_path.write_text("\n".join(lines))
+    report_path.write_text("\n".join(lines), encoding="utf-8")
     summary["report_path"] = str(report_path)
     summary["results_path"] = str(results_path)
     return {"report_path": str(report_path), "results_path": str(results_path)}
@@ -1244,7 +1330,7 @@ def run_suite(
     # leaves usable partial evidence if it is interrupted (and so a watcher can
     # see progress).  Written to ``out/results_incremental.jsonl``.
     inc_path = out / "results_incremental.jsonl"
-    inc = open(inc_path, "a", buffering=1)
+    inc = open(inc_path, "a", encoding="utf-8", buffering=1)
     done_count = 0
 
     def _persist(res: dict) -> None:
@@ -1359,6 +1445,16 @@ def run_suite(
     summary["n_failed"] = sum(1 for c in summary["checks"] if not c["ok"])
     summary["n_checks"] = len(summary["checks"])
     summary["failing_garments"] = sorted({c["garment"] for c in summary["checks"] if not c["ok"]})
+    # v2.3: a run that produced no checks at all (e.g. every worker died) must never
+    # look like a clean pass -- the CLI keys its exit status off these counters.
+    summary["n_garments_requested"] = len(jobs_list)
+    summary["n_garments_ok"] = len(results)
+    summary["n_garments_failed"] = max(0, len(jobs_list) - len(results))
+    summary["run_ok"] = bool(
+        summary["n_checks"] > 0
+        and summary["n_failed"] == 0
+        and summary["n_garments_failed"] == 0
+    )
     return summary
 
 

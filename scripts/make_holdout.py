@@ -5,9 +5,10 @@ The example pairs (``train/``) are the only split with targets, so it is the onl
 you can self-score on. Split it into a keep set and a val (holdout) set, then score your
 predictions on the val side with ``scripts/eval_val.py``:
 
-    python scripts/make_holdout.py \\
-        --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl \\
-        --frac 0.1 --seed 0 --out holdout/
+    python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout
+
+Run it with the same interpreter that has the scorer installed (the repo's
+virtualenv interpreter); the command printed at the end shows the exact one.
 
 writes, keeping the exact ``train/pairs.jsonl`` row schema (``{pair_id, inputs[],
 target}``):
@@ -44,7 +45,7 @@ def resolve_dataset_root(pairs: Path, explicit: str | None) -> Path:
     meta = pairs.parent / "meta.json"
     if meta.is_file():
         try:
-            recorded = json.loads(meta.read_text(encoding="utf-8")).get("dataset_root")
+            recorded = json.loads(meta.read_text(encoding="utf-8-sig")).get("dataset_root")
         except (OSError, ValueError):
             recorded = None
         if recorded:
@@ -67,7 +68,7 @@ def read_pairs(pairs: Path) -> list[dict]:
     if not pairs.is_file():
         raise SystemExit(f"error: --pairs not found: {pairs}")
     rows: list[dict] = []
-    for lineno, line in enumerate(pairs.read_text(encoding="utf-8").splitlines(), start=1):
+    for lineno, line in enumerate(pairs.read_text(encoding="utf-8-sig").splitlines(), start=1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -197,12 +198,12 @@ def main(argv: list[str] | None = None) -> int:
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    if repeated:
+    if repeated and not args.group_by_target:
         print(f"warning: {repeated} pair(s) share their target with another pair; a random split can "
               f"place the same garment on both sides (see --group-by-target).")
     print(f"holdout: {len(train)} train / {len(val)} val pair(s) -> {out}")
     print(f"dataset root: {root_str}  (recorded in {out / 'meta.json'})")
-    print(f"score with:  env -u PYTHONPATH .venv/bin/python scripts/eval_val.py "
+    print(f'score with:  "{sys.executable}" scripts/eval_val.py '
           f"--pairs {out / 'val.jsonl'} --preds predictions --team <team> --out val_out")
     return 0
 

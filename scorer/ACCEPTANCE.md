@@ -5,8 +5,8 @@ summary of the checks behind it.
 
 ## What was tested
 
-The acceptance suite (`python -m sartiq_score.cli sanity`) runs over reference packshots with fixed
-seeds and reports every failing case. It has six families.
+The acceptance suite (`.venv/bin/python -m sartiq_score.cli sanity`) runs over reference packshots
+with fixed seeds and reports every failing case. It has six families.
 
 - Invariance, within 2 points: PNG against JPEG q95, EXIF-rotated file, RGBA with a transparent
   background, aspect-preserving 0.5x resize, 20 % padding, 10 % translation without clipping,

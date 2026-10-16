@@ -1,8 +1,8 @@
-"""Owner A tests: io (decode / colour / limits) and align (canonicalisation).
+"""Tests for io (decode / colour / limits) and align (canonicalisation).
 
 Run from ``scorer/``::
 
-    env -u PYTHONPATH U2NET_HOME=$PWD/.models .venv/bin/python -m pytest tests/test_io_align.py -q
+    U2NET_HOME=$PWD/.models .venv/bin/python -m pytest tests/test_io_align.py -q
 
 Optional real-data tests: point SCORER_TEST_REFS at a folder of <name>/out.jpg packshots and
 SCORER_TEST_P3_PNG at a PNG with a Display P3 profile and EXIF orientation 6; otherwise they skip.

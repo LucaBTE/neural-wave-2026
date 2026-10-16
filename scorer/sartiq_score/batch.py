@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Leaderboard batch scoring (owner C) — SPEC "Event rules".
+"""Leaderboard batch scoring — SPEC "Event rules".
 
 Layouts::
 
@@ -67,7 +67,7 @@ def load_garment_meta(refs_dir: Path | None) -> dict[str, dict]:
     if not path.is_file():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     if isinstance(data, dict) and isinstance(data.get("garments"), dict):
@@ -80,7 +80,7 @@ def load_garment_meta(refs_dir: Path | None) -> dict[str, dict]:
     return out
 
 
-#: Owner decision (2026-10-16): every target is flat-lay; ``garments.json`` is
+#: v2.2: every target is flat-lay; ``garments.json`` is
 #: optional and only ever overrides this default.
 DEFAULT_TARGET_STYLE = "flat_lay"
 
@@ -114,7 +114,7 @@ def load_manifest(manifest) -> tuple[dict[str, dict[str, Path]], dict[tuple[str,
         raise FileNotFoundError(f"manifest not found: {path}")
     refs: dict[str, dict[str, Path]] = {}
     explicit: dict[tuple[str, str], Path] = {}
-    with open(path) as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line or line.startswith("#"):
@@ -273,7 +273,7 @@ def build_tasks(refs: dict, subs: dict, teams: list[str], explicit: dict | None 
 
 
 def write_garments_csv(refs: dict, meta: dict, path: Path) -> None:
-    with open(path, "w", newline="") as fh:
+    with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(["garment", "view", "reference", "target_style"])
         for gid in sorted(refs):
@@ -371,7 +371,7 @@ def write_leaderboard(rows: list[dict], path: Path) -> None:
         "pairs_scored", "pairs_missing", "garments_scored", "garments_missing",
         "n_review", "n_invalid",
     ]
-    with open(path, "w", newline="") as fh:
+    with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
@@ -379,13 +379,13 @@ def write_leaderboard(rows: list[dict], path: Path) -> None:
 
 
 def write_scores_jsonl(records: list[dict], path: Path) -> None:
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         for rec in records:
             fh.write(json.dumps(jsonable(rec), sort_keys=True) + "\n")
 
 
 def write_review_csv(records: list[dict], path: Path) -> None:
-    with open(path, "w", newline="") as fh:
+    with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(["team", "garment", "view", "score", "status", "flags", "submission"])
         for rec in records:

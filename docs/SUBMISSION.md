@@ -16,8 +16,9 @@ submissions/identity/d002/front.png
 submissions/identity/g01/front.png
 ```
 
-* `<team>` is your team name, one folder per team. Keep it filesystem-safe: no spaces, use `-` or
-  `_`.
+* `<team>` is your team name, one folder per team. Keep it filesystem-safe: lowercase ASCII letters,
+  digits, `-` and `_` only, no spaces, and avoid Windows device names (`con`, `nul`, `aux`, `com1`,
+  `lpt1`).
 * `<garment_id>` is the id from the manifest: `d001...` for dev, `g01...` for the on-site
   garments. It must match exactly. An id that is not in the manifest is a validation error: the
   validator rejects it, so fix the id before you hand in. A typo is not a missing slot; it is a
@@ -90,24 +91,27 @@ holdout and a prediction first (the quickstart in the top-level [README.md](../R
 same):
 
 ```bash
-.venv/bin/python scripts/make_holdout.py \
-    --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/
-.venv/bin/python baselines/baseline_identity.py \
-    --manifest holdout/val.jsonl --out predictions --team identity \
-    --dataset ../sartiq_neural_wave_2026
+.venv/bin/python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/ --group-by-target
+.venv/bin/python baselines/baseline_identity.py --manifest holdout/val.jsonl --out predictions --team identity --dataset ../sartiq_neural_wave_2026
 ```
 
-Then pick any pair id from `holdout/val.jsonl` and render its contact sheet:
+Then pick any pair id from `holdout/val.jsonl` and render its contact sheet. Bash / zsh / macOS /
+WSL2:
 
 ```bash
 PAIR=$(.venv/bin/python -c "import json,pathlib; print(json.loads(pathlib.Path('holdout/val.jsonl').read_text().splitlines()[0])['pair_id'])")
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli debug \
-    --ref ../sartiq_neural_wave_2026/train/$PAIR/target.jpg \
-    --sub predictions/identity/$PAIR/front.jpg --out sheet_$PAIR.jpg
+.venv/bin/python -m sartiq_score.cli debug --ref ../sartiq_neural_wave_2026/train/$PAIR/target.jpg --sub predictions/identity/$PAIR/front.jpg --out sheet_$PAIR.jpg
+```
+
+PowerShell (native Windows):
+
+```powershell
+$PAIR = (Get-Content -LiteralPath "holdout/val.jsonl" -Encoding UTF8 -TotalCount 1 | ConvertFrom-Json).pair_id
+.venv\Scripts\python.exe -m sartiq_score.cli debug --ref "../sartiq_neural_wave_2026/train/$PAIR/target.jpg" --sub "predictions/identity/$PAIR/front.jpg" --out "sheet_$PAIR.jpg"
 ```
 
 The contact sheet is written to the repository root and is ignored by git; delete it when you are
-done.
+done. On Windows, run `.venv\Scripts\python.exe` in place of `.venv/bin/python`.
 
 ## 5. Deadline and hand-in
 

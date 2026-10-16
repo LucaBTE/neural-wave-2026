@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-pair debug contact sheet (owner C).
+"""Per-pair debug contact sheet.
 
 Layout, left to right::
 

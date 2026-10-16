@@ -1,9 +1,8 @@
 """Guard rails: the participant-facing scripts must not leak machine paths or credentials.
 
-These checks are deliberately generic. The organiser-side scanner
-(``tools/check_public_repo.py``) owns the source-specific denylist (internal ids,
-source names, internal split names); that list must not ship inside this repo,
-because the repository is public.
+These checks are deliberately generic. The organiser-side scanner owns the
+source-specific denylist (internal ids, source names, internal split names); that
+list must not ship inside this repo, because the repository is public.
 """
 
 from __future__ import annotations

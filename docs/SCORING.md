@@ -79,7 +79,7 @@ Silhouette IoU punishes wrong shape or missing pieces. SSIM is a cheap structura
 | status | when | effect on score |
 |---|---|---|
 | invalid | the file cannot be read; file > 100 MB; min side < 256 px; max side > 12000 px; aspect ratio > 3:1; decompression bomb (> 150 MPix); animated or multi-frame image; the file is a symlink; a flat-field image (whole-image luma standard deviation < 4/255) | score 0 |
-| review | any of: `mask_empty` (mask < 1% of image), `mask_suspect` (> 92%), `truncated` (mask touches the border over > 10% of that side) on your submission, `multi_component` on your submission while the reference is a single component, or `clip` sub-score < 0.30 | score kept, a human looks at it |
+| review | any of: `mask_empty` (mask < 1% of image), `mask_suspect` (> 92%), `truncated` (mask touches the border over > 10% of that side) on the reference or your submission, `multi_component` on your submission while the reference is a single component, or `clip` sub-score < 0.30 | score kept, a human looks at it |
 | ok | none of the above | |
 
 `review` is not a penalty and not a rejection. It means the scorer is not fully confident and a
@@ -119,6 +119,9 @@ dev ids and test ids never collide, so one team folder can hold both. PNG is the
 A wrong guess is almost always better than an empty slot, so never submit an empty folder on
 purpose.
 
+On dev the leaderboard reports team totals only: gaps under about 3 points are within run-to-run
+noise, and in rehearsal final test scores landed about 10 to 13 points below the dev numbers.
+
 An official run writes `leaderboard.csv`, `scores.jsonl` (one full `ScoreReport` per slot,
 including missing ones), `review.csv`, `garments.csv`, and optional `debug/<team>/<garment>_<view>.jpg`
 contact sheets (`ref | sub | canon ref | canon sub | masks | per-cell dE00 heat map`).
@@ -128,23 +131,22 @@ contact sheets (`ref | sub | canon ref | canon sub | masks | per-cell dE00 heat 
 ## 6. How to self-evaluate
 
 There is no public validation split. Carve a holdout out of the example pairs (`train/`) and score
-pairs you did not tune on, with the same scorer the organisers use. First make the split:
+pairs you did not tune on, with the same scorer the organisers use. First make the split, keeping
+pairs that share a target on the same side:
 
 ```bash
-.venv/bin/python scripts/make_holdout.py \
-    --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl \
-    --frac 0.1 --seed 0 --out holdout/
+.venv/bin/python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/ --group-by-target
 ```
 
 Then predict on the holdout inputs and score the predictions:
 
 ```bash
-.venv/bin/python baselines/baseline_identity.py \
-    --manifest holdout/val.jsonl --out predictions --team identity \
-    --dataset ../sartiq_neural_wave_2026
-env -u PYTHONPATH .venv/bin/python scripts/eval_val.py \
-    --pairs holdout/val.jsonl --preds predictions --team identity --out val_out
+.venv/bin/python baselines/baseline_identity.py --manifest holdout/val.jsonl --out predictions --team identity --dataset ../sartiq_neural_wave_2026
+.venv/bin/python scripts/eval_val.py --pairs holdout/val.jsonl --preds predictions --team identity --out val_out --jobs 1
 ```
+
+`--jobs 1` is the safe default: each worker loads its own copy of the models (about 1.4 GB of RAM
+each). Raise it only after the models are cached.
 
 `eval_val.py` writes `val_out/val_manifest.jsonl` (exactly what the scorer saw) and
 `val_out/leaderboard.csv`. The scorer accepts a JSONL manifest as an alternative to a reference
@@ -152,14 +154,11 @@ tree. One row looks like this (the ids are your holdout's; `ref` is the target, 
 prediction):
 
 ```jsonl
-{"garment_id": "t0001", "view": "front",
- "ref": "../sartiq_neural_wave_2026/train/t0001/target.jpg",
- "sub": "predictions/identity/t0001/front.jpg"}
+{"garment_id": "t0001", "view": "front", "ref": "../sartiq_neural_wave_2026/train/t0001/target.jpg", "sub": "predictions/identity/t0001/front.jpg"}
 ```
 
 ```bash
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli batch \
-    --manifest val_out/val_manifest.jsonl --out val_out
+.venv/bin/python -m sartiq_score.cli batch --manifest val_out/val_manifest.jsonl --out val_out
 ```
 
 Two things the scorer enforces, both verified:
@@ -169,13 +168,19 @@ Two things the scorer enforces, both verified:
 * a row without `sub`, with no submission tree, is scored as a missing slot with score 0. You
   cannot hide a missing prediction.
 
-Watch one pair first, it is faster to iterate with. Take a pair id from `holdout/val.jsonl`:
+Watch one pair first, it is faster to iterate with. The first line of `holdout/val.jsonl` gives you
+a pair id. Bash / zsh / macOS / WSL2:
 
 ```bash
 PAIR=$(.venv/bin/python -c "import json,pathlib; print(json.loads(pathlib.Path('holdout/val.jsonl').read_text().splitlines()[0])['pair_id'])")
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli pair \
-    --ref ../sartiq_neural_wave_2026/train/$PAIR/target.jpg \
-    --sub predictions/identity/$PAIR/front.jpg --json
+.venv/bin/python -m sartiq_score.cli pair --ref ../sartiq_neural_wave_2026/train/$PAIR/target.jpg --sub predictions/identity/$PAIR/front.jpg --json
+```
+
+PowerShell (native Windows):
+
+```powershell
+$PAIR = (Get-Content -LiteralPath "holdout/val.jsonl" -Encoding UTF8 -TotalCount 1 | ConvertFrom-Json).pair_id
+.venv\Scripts\python.exe -m sartiq_score.cli pair --ref "../sartiq_neural_wave_2026/train/$PAIR/target.jpg" --sub "predictions/identity/$PAIR/front.jpg" --json
 ```
 
 `--json` does not make stdout pure JSON. The scorer prints the LPIPS model banner before the
@@ -184,23 +189,27 @@ report, so `json.load(sys.stdin)` on the whole stream fails. For machine-readabl
 If you must parse stdout yourself, drop the banner and parse from the first line that is a lone `{`
 to the end of output; that is what the scorer does internally.
 
-and render a contact sheet when a number surprises you:
+and render a contact sheet when a number surprises you. Bash / zsh / macOS / WSL2:
 
 ```bash
-env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli debug \
-    --ref ../sartiq_neural_wave_2026/train/$PAIR/target.jpg \
-    --sub predictions/identity/$PAIR/front.jpg --out sheet_$PAIR.jpg
+.venv/bin/python -m sartiq_score.cli debug --ref ../sartiq_neural_wave_2026/train/$PAIR/target.jpg --sub predictions/identity/$PAIR/front.jpg --out sheet_$PAIR.jpg
 ```
 
-Timing measured here: about 3.3 s per pair warm on CPU, with a one-off ~10 s startup.
+PowerShell (native Windows):
+
+```powershell
+.venv\Scripts\python.exe -m sartiq_score.cli debug --ref "../sartiq_neural_wave_2026/train/$PAIR/target.jpg" --sub "predictions/identity/$PAIR/front.jpg" --out "sheet_$PAIR.jpg"
+```
+
+Timing measured here: about 1.5 to 4 s per pair warm on a 4-core CPU (up to about 4 s when the CPU
+is busy), with a one-off startup and a one-off ~1 GB model download on first use.
 
 If you build your own reference tree (`<refs>/<garment_id>/front.<ext>`, the view is `front`), you can
 score it with the batch form instead of the manifest form. Syntax template, the bracketed names are
 placeholders, not literal:
 
 ```
-python -m sartiq_score.cli batch --refs <refs> --subs submissions \
-    --out my_scores --debug-sheets --jobs 4
+.venv/bin/python -m sartiq_score.cli batch --refs <refs> --subs submissions --out my_scores --debug-sheets --jobs 1
 ```
 
 ---

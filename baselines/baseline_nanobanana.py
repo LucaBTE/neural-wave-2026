@@ -28,14 +28,15 @@ Provider bytes are decoded and re-saved as a genuine PNG when Pillow is installe
 (the repo's venv), so a provider that returns JPEG/WebP still lands as `front.png`.
 Only the standard library is required otherwise.
 
-    .venv/bin/python baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/dev/inputs.jsonl \\
-        --out predictions --team hosted-edit --dry-run
-    .venv/bin/python baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/train/pairs.jsonl \\
-        --out predictions --team hosted-edit --limit 4
+    python baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/dev/inputs.jsonl --out predictions --team hosted-edit --dry-run
+    python baselines/baseline_nanobanana.py --manifest ../sartiq_neural_wave_2026/train/pairs.jsonl --out predictions --team hosted-edit --limit 4
 
 Every real call appends one line to ``<out>/_manifest.jsonl`` (model, prompt,
-latency, error), so a run is reproducible afterwards. ``--dry-run`` writes the exact
-request payloads to ``<out>/_requests/`` and makes no network call, so it needs no key.
+latency, error), so a run is reproducible afterwards. ``--dry-run`` writes a
+*preview* of each request payload to ``<out>/_requests/`` -- the inline image data
+is truncated so the files stay small -- and makes no network call, so it needs no
+key. Only a transient failure (HTTP 429/5xx, a timeout, a connection error) is
+retried; a deterministic provider error (e.g. 401) is reported once.
 """
 
 from __future__ import annotations
@@ -182,6 +183,22 @@ def data_uri(path: Path) -> str:
     return f"data:{mime_of(path)};base64,{blob}"
 
 
+class TransientError(RuntimeError):
+    """A failure worth retrying: HTTP 429/5xx, a timeout, or a connection error.
+
+    Anything else (4xx auth/validation, a malformed provider response, a missing
+    result image) is deterministic -- retrying it just burns quota and time.
+    """
+
+
+_TRANSIENT_HTTP = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _http_error(code: int, detail: str) -> RuntimeError:
+    cls = TransientError if (code in _TRANSIENT_HTTP or 500 <= code < 600) else RuntimeError
+    return cls(f"HTTP {code}: {detail}")
+
+
 def _post(url: str, body: bytes, headers: dict[str, str], timeout: float,
           secrets: list[str] | None = None) -> dict:
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -192,9 +209,10 @@ def _post(url: str, body: bytes, headers: dict[str, str], timeout: float,
         # Read the body but never echo it raw: providers can reflect the request (and its
         # credential) back in an error. Only allowlisted fields survive, then redacted.
         detail = summarize_provider_error(exc.read(), secrets)
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"network error: {redact(exc.reason, secrets)}") from exc
+        raise _http_error(exc.code, detail) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise TransientError(f"network error: {redact(reason, secrets)}") from exc
 
 
 def _get(url: str, headers: dict[str, str], timeout: float,
@@ -205,9 +223,10 @@ def _get(url: str, headers: dict[str, str], timeout: float,
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = summarize_provider_error(exc.read(), secrets)
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"network error: {redact(exc.reason, secrets)}") from exc
+        raise _http_error(exc.code, detail) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise TransientError(f"network error: {redact(reason, secrets)}") from exc
 
 
 def _multipart(fields: dict[str, str], files: dict[str, tuple[str, bytes, str]]) -> tuple[bytes, str]:
@@ -307,8 +326,8 @@ def fal_generate(url: str, body: bytes, key: str, timeout: float) -> bytes:
             raise RuntimeError(f"fal request {request_id} ended with status {status}: "
                                f"{redact(json.dumps(state), secrets)[:300]}")
         if time.time() > deadline:
-            raise TimeoutError(f"fal request {request_id} still {status or 'unknown'} "
-                               f"after {timeout:.0f}s")
+            raise TransientError(f"fal request {request_id} still {status or 'unknown'} "
+                                 f"after {timeout:.0f}s")
         time.sleep(FAL_POLL_SECONDS)
 
     result = _get(response_url, headers, per_request, secrets)
@@ -319,9 +338,9 @@ def fal_generate(url: str, body: bytes, key: str, timeout: float) -> bytes:
     try:
         with urllib.request.urlopen(images[0]["url"], timeout=per_request) as resp:
             return resp.read()
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"failed to download the result image: "
-                           f"{redact(exc.reason, secrets)}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientError(f"failed to download the result image: "
+                             f"{redact(getattr(exc, 'reason', exc), secrets)}") from exc
 
 
 def extract_image(provider: str, response: dict, timeout: float,
@@ -342,9 +361,9 @@ def extract_image(provider: str, response: dict, timeout: float,
             try:
                 with urllib.request.urlopen(item["url"], timeout=timeout) as resp:
                     return resp.read()
-            except urllib.error.URLError as exc:
-                raise RuntimeError(f"failed to download the result image: "
-                                   f"{redact(exc.reason, secrets)}") from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise TransientError(f"failed to download the result image: "
+                                     f"{redact(getattr(exc, 'reason', exc), secrets)}") from exc
     raise RuntimeError(f"no image in response: {redact(json.dumps(response), secrets)[:300]}")
 
 
@@ -444,8 +463,11 @@ def main(argv: list[str] | None = None) -> int:
             target = reqdir / f"{row['id']}_{view}.request"
             if headers.get("Content-Type", "").startswith("application/json"):
                 target = target.with_suffix(".json")
-            target.write_bytes(dry_payload(args.provider, body))
-            print(f"[dry-run] {src} -> {url}  (payload: {target}, {len(body)} bytes)")
+            payload = dry_payload(args.provider, body)
+            target.write_bytes(payload)
+            note = f", image data truncated from {len(body)}" if len(payload) != len(body) else ""
+            print(f"[dry-run] {src} -> {url}  "
+                  f"(preview payload: {target}, {len(payload)} bytes{note}; nothing sent)")
             continue
 
         dst = out_root / row["id"] / f"{view}.png"
@@ -454,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         error = None
         data = None
         for attempt in range(args.retries + 1):
+            error = None  # a successful attempt must clear any earlier failure
             try:
                 if args.provider == "fal":
                     data = fal_generate(url, body, key, args.timeout)
@@ -466,10 +489,13 @@ def main(argv: list[str] | None = None) -> int:
                     resp = _post(url, body, hdrs, args.timeout, secrets)
                     data = extract_image(args.provider, resp, args.timeout, secrets)
                 break
-            except Exception as exc:  # noqa: BLE001 - report and continue
+            except TransientError as exc:  # 429/5xx, timeout, connection error -> retry
                 error = redact(f"{type(exc).__name__}: {exc}", secrets)
                 if attempt < args.retries:
                     time.sleep(2.0 * (attempt + 1))
+            except Exception as exc:  # noqa: BLE001 - deterministic failure: do not retry
+                error = redact(f"{type(exc).__name__}: {exc}", secrets)
+                break
         elapsed = round(time.time() - started, 2)
 
         entry = {"id": row["id"], "view": view, "input": str(src), "provider": args.provider,
@@ -492,7 +518,8 @@ def main(argv: list[str] | None = None) -> int:
             fh.write(json.dumps(entry, sort_keys=True) + "\n")
 
     if args.dry_run:
-        print(f"\n(dry run) {len(rows)} request(s) under {reqdir}; nothing was sent, no key needed.")
+        print(f"\n(dry run) {len(rows)} request preview(s) under {reqdir}; "
+              f"nothing was sent, no key needed.")
         return 0
     print(f"\n{ok} written, {failed} failed -> {out_root}\nmanifest: {run_manifest}")
     if failed and not ok:

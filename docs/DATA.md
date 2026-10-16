@@ -1,7 +1,9 @@
 # Data, layout, splits, manifests
 
-The dataset is not in this repository. Download the zip from https://drive.google.com/drive/folders/1INEK1AxsB9Tt79mabm8ElxNAZLjWwXL3?usp=sharing and unzip it next
-to the repo, so the dataset root sits as a sibling:
+The dataset is not in this repository. Download it from https://drive.google.com/drive/folders/1INEK1AxsB9Tt79mabm8ElxNAZLjWwXL3?usp=sharing as the archive file named
+`sartiq_neural_wave_2026.zip` and unpack it next to the repo, so the dataset root sits as a sibling.
+Download that named file: Google Drive also offers a zip of the surrounding folder, which unpacks to
+the wrong layout.
 
 ```
 <parent>/
@@ -9,14 +11,24 @@ to the repo, so the dataset root sits as a sibling:
 └── neural-wave-2026/            this repository (you may have cloned it under any name)
 ```
 
-Put the downloaded `sartiq_neural_wave_2026.zip` in `<parent>` (next to the clone), and run this
-from the repository root:
+Put the downloaded `sartiq_neural_wave_2026.zip` in `<parent>` (next to the clone). From the
+repository root, unpack it there:
+
+Bash / zsh / macOS / WSL2:
 
 ```bash
-unzip ../sartiq_neural_wave_2026.zip -d ..
+unzip -q ../sartiq_neural_wave_2026.zip -d ..
 ```
 
-Every path inside a manifest is relative to the dataset root.
+PowerShell (native Windows) — Windows has no `unzip`, so use the interpreter you created in the
+quickstart:
+
+```powershell
+.venv\Scripts\python.exe -m zipfile -e "..\sartiq_neural_wave_2026.zip" ".."
+```
+
+Either way the data lands at `../sartiq_neural_wave_2026/`. Every path inside a manifest is relative
+to the dataset root.
 
 ---
 
@@ -108,18 +120,19 @@ There is no public validation split. Carve a holdout out of the example pairs an
 did not tune on:
 
 ```bash
-.venv/bin/python scripts/make_holdout.py \
-    --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl \
-    --frac 0.1 --seed 0 --out holdout/
+.venv/bin/python scripts/make_holdout.py --pairs ../sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/ --group-by-target
 ```
 
+Pass `--group-by-target` so pairs that share the same target file stay on one side of the split.
 That writes `holdout/train.jsonl` and `holdout/val.jsonl` (same schema, paths still relative to
 the dataset root), then score predictions on `val.jsonl` with `scripts/eval_val.py`. Details and
 an example in [docs/SCORING.md](SCORING.md).
 
 One warning that a random split will not save you from: pairs can share a garment. If the same
 garment lands in both your holdout and your training slice, your holdout score is optimistic.
-Split by garment where you can.
+Split by target (`--group-by-target`) or by garment where you can.
+
+On Windows, run `.venv\Scripts\python.exe` in place of `.venv/bin/python`.
 
 This is a method hint, not a competition rule. Using the dev or the test inputs for anything
 during the event, including unsupervised adaptation, is allowed.

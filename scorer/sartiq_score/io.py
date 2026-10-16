@@ -1,4 +1,4 @@
-"""Image decoding / normalisation (owner A).
+"""Image decoding / normalisation.
 
 Contract: ``load_image(path) -> Loaded`` (see :mod:`sartiq_score.types`).
 

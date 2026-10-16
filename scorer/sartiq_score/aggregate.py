@@ -1,6 +1,6 @@
 """Policy, review gates and :class:`~sartiq_score.types.ScoreReport` assembly.
 
-Owner: worker B.  This module turns a pair of canonicalised images into the final
+This module turns a pair of canonicalised images into the final
 "reference similarity" score.  Policy is FROZEN before submissions (SPEC.md
 "Metrics" / "Weights" / "Status rules"); weights are never fitted to synthetic
 data.  Augmentations only ever test invariance and monotonicity.
