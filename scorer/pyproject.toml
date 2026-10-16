@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sartiq-score"
+version = "2.2.0"
+description = "Reference-similarity scorer for the Sartiq Neural Wave 2026 challenge (v2)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Neural Wave 2026 hackathon terms" }
+authors = [{ name = "Sartiq" }]
+
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10.2",
+    "pillow-heif>=0.16",
+    "scikit-image>=0.22",
+    "scipy>=1.11",
+    "torch>=2.2,<3",
+    "torchvision>=0.17,<1",
+    "lpips>=0.1.4",
+    "open_clip_torch>=2.24",
+    "rembg>=2.0.50",
+    "onnxruntime>=1.17",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+sartiq-score = "sartiq_score.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sartiq_score"]
+
+# CPU-only installs: `uv pip install torch torchvision --index-url .../cpu` first,
+# or keep the pinned wheel set that ships with .venv.
+[tool.uv]
+# Model weights are NOT fetched at install time; they land in .models/ on the
+# first Scorer() construction (TORCH_HOME / HF_HOME / U2NET_HOME all point there).
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
