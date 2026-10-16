@@ -83,5 +83,5 @@ service of that.
 * Dark garment on dark backdrop, or white on white: the segmenter's weak spot.
 * A stack of other garments in frame: extra mask components.
 * Shooting through a phone screen preview of the previous shot.
-* Re-shooting later. Capture all 16 garments cleanly the first time. Improving a good capture costs
+* Re-shooting later. Capture all 15 garments cleanly the first time. Improving a good capture costs
   minutes; recovering a bad one costs the garment.
