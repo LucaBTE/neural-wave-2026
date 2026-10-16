@@ -93,7 +93,11 @@ def test_module_imports_without_resource(monkeypatch):
     monkeypatch.setattr(sanity, "_resource", None)
     assert sanity._max_rss_kb() is None
     monkeypatch.undo()
-    assert importlib.reload(sanity)._max_rss_kb() is not None
+    reloaded = importlib.reload(sanity)
+    if reloaded._resource is None:  # real Windows: no resource module, helper reports None
+        assert reloaded._max_rss_kb() is None
+    else:
+        assert reloaded._max_rss_kb() is not None
 
 
 # --------------------------------------------------------------------------- #
