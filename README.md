@@ -166,7 +166,7 @@ word. The weights are frozen before submissions open and are never fitted to sub
 
 ## Contacts
 
-* Luca Ambrosini (primary): luca.ambrosini@sartiq.com
+* Luca Pasini (primary): luca.pasini@sartiq.com
 * Felipe Cardoso (technical): felipe.cardoso@sartiq.com
 * Sartiq: https://sartiq.com
 
