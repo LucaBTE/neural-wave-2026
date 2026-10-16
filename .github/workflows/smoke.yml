@@ -1,0 +1,117 @@
+name: smoke
+
+# Cross-platform smoke test for the participant repo: install exactly as the
+# README quickstart says, run the test suites, then score a real pair with the
+# documented CLI.  It is a diagnostic gate, not a scoring run.
+
+on:
+  push:
+    branches: ["main", "ci/smoke"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux x86-64, macOS arm64, Windows x86-64
+        os: [ubuntu-latest, macos-14, windows-latest]
+    defaults:
+      run:
+        # The README quickstart is written for bash; GitHub's Windows runners
+        # ship Git Bash, so one shell keeps the commands identical on all three.
+        shell: bash
+    env:
+      # Pin every test and the CLI at the one model bundle the README documents.
+      SCORER_MODEL_DIR: ${{ github.workspace }}/scorer/.models
+    steps:
+      - uses: actions/checkout@v4
+
+      # NOTE: deliberately NO `python-version` input here.  In setup-uv v5 that
+      # input creates AND activates `.venv`, which makes the README's
+      # `uv venv --python 3.12` fail with "A virtual environment already exists".
+      # Letting the README command create the venv is also the thing under test.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "scorer/pyproject.toml"
+          cache-suffix: ${{ runner.os }}
+
+      # README.md#quickstart, verbatim.  The dataset steps are not reproducible
+      # in CI (the dataset is a private Google Drive download).
+      - name: README quickstart install
+        run: |
+          set -eux
+          uv --version
+          uv venv --python 3.12
+          uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --python .venv -e 'scorer[test]'
+
+      - name: Record whether README paths work verbatim on this OS
+        run: |
+          set -u
+          if [ -x .venv/bin/python ]; then
+            echo "README-PARITY: .venv/bin/python exists -> README commands run verbatim"
+            echo "VENV_PY=.venv/bin/python" >> "$GITHUB_ENV"
+          else
+            echo "::warning title=README path mismatch::README.md and scorer/README.md hardcode .venv/bin/python, which does not exist on this runner; using .venv/Scripts/python.exe instead."
+            echo "README-PARITY: .venv/bin/python MISSING -> use .venv/Scripts/python.exe"
+            echo "VENV_PY=.venv/Scripts/python.exe" >> "$GITHUB_ENV"
+          fi
+          echo "venv contents:"; ls .venv
+
+      # Cache the ~1.2 GB weight bundle the first score downloads.  The scorer
+      # version lives in scorer/pyproject.toml (version = "2.2.0"), so hashing
+      # it keys the cache on the scorer version and invalidates on any bump.
+      - name: Restore scorer model bundle
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: scorer/.models
+          key: scorer-models-${{ runner.os }}-${{ hashFiles('scorer/pyproject.toml') }}
+
+      - name: Warm the model bundle (first use downloads ~1.2 GB)
+        run: |
+          set -eux
+          "$VENV_PY" -c "from sartiq_score.api import Scorer; Scorer(); print('model bundle ready')"
+
+      - name: pytest tests (repo scripts)
+        run: |
+          set -o pipefail
+          "$VENV_PY" -m pytest tests -q
+
+      - name: pytest scorer/tests (frozen scorer)
+        run: |
+          set -o pipefail
+          # -rs prints per-test skip reasons, so a platform gap is recorded,
+          # not silently skipped.
+          "$VENV_PY" -m pytest scorer/tests -q -rs
+
+      # Runs even if the suite above failed: the documented `pair` command does
+      # not import sartiq_score.sanity, so a sanity-suite failure on one OS must
+      # not hide whether the scoring path itself works there.
+      - name: Scoring smoke test (documented `pair` command)
+        if: always()
+        run: |
+          set -o pipefail
+          "$VENV_PY" .github/smoke_score.py
+
+      # actions/cache only persists its automatic post-step after a successful
+      # job, so a job that fails on a repo defect would re-download the whole
+      # bundle on every re-run.  Save the (now complete) bundle explicitly on a
+      # cold cache, pass or fail.
+      - name: Save scorer model bundle
+        if: always() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: scorer/.models
+          key: scorer-models-${{ runner.os }}-${{ hashFiles('scorer/pyproject.toml') }}
