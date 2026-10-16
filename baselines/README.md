@@ -8,12 +8,12 @@ same submission layout, so you can swap them for your own pipeline without touch
 | `baseline_identity.py` | copies the input image through as the prediction | the floor. It proves your harness works and gives the number a real pipeline has to beat. |
 | `baseline_nanobanana.py` | calls a hosted image-edit model with a flat-lay prompt | the "just prompt a big model" approach the challenge suggests. |
 
-Neither is a solution. The identity baseline copies the input through unchanged, so it scores
-whatever a bare phone capture scores. The hosted-model baseline sends the input to an existing
-hosted edit model with a flat-lay prompt, with no capture protocol and no per-garment tuning, so it
-scores whatever a single prompt produces. Custom training is optional. The organisers solved the
-challenge with existing models and no custom training; improving on the hosted baseline means
-better prompts, model choice and post-processing.
+The identity baseline copies the input through unchanged, so it scores whatever a bare phone capture
+scores. The hosted-model baseline sends the input to an existing hosted edit model with a flat-lay
+prompt, with no capture protocol and no per-garment tuning, so it scores whatever a single prompt
+produces. Custom training is optional. The organisers solved the challenge with existing models and
+no custom training; improving on the hosted baseline means better prompts, model choice and
+post-processing.
 
 Both take the same arguments: `--manifest <jsonl> --out <dir> --team <name> [--dataset <root>]`.
 They work on `train/pairs.jsonl` (using `pair_id` and the first input) and on the dev and test
@@ -31,7 +31,8 @@ and `test/`.
 
 Bytes are copied unchanged, so there is no re-encode loss. Point it at `dev/inputs.jsonl` with
 `--out submissions` to build a dev submission, or at a holdout manifest to get a number you can
-score. Carve the holdout first (the quickstart in the top-level `README.md`, or `docs/DATA.md`):
+score. Carve the holdout first (the quickstart in the top-level [README.md](../README.md), or
+[docs/DATA.md](../docs/DATA.md)):
 
 ```bash
 .venv/bin/python scripts/make_holdout.py \
@@ -59,7 +60,8 @@ export FAL_KEY=...                 # the key you were given at kickoff
 Run `--dry-run` first: it writes the request payloads to `submissions/_requests/` and makes no
 network call. Drop `--dry-run` to spend. On fal the default model is `google/nano-banana-2.1/edit`,
 so no `--model` is needed. An edit costs about $0.06, so a run over every dev garment is roughly
-$2. The key and its budget are for challenge work only; the top-level `README.md` has the details.
+$2. The key and its budget are for challenge work only; the top-level [README.md](../README.md) has
+the details.
 
 Options that matter:
 

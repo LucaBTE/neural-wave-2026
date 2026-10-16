@@ -1,9 +1,9 @@
 # Capture guide, hints for the on-site set
 
-Optional capture guidance. Designing the capture protocol is the applied-ML core of the
-challenge, and a team that captures cleverly with a simple pipeline can beat a sophisticated one
-fed bad inputs. What follows is the practical floor: the things that will otherwise cost you
-points for reasons that have nothing to do with your pipeline.
+Optional capture guidance. Designing the capture protocol is part of the challenge: a team that
+captures cleverly with a simple pipeline can beat a sophisticated one fed bad inputs. This guide
+lists the things that will otherwise cost you points for reasons that have nothing to do with your
+pipeline.
 
 You are scored on flat-lay packshots of the 16 on-site garments. Your inputs are your own photos,
 shot on the day with the set Sartiq provides (backdrop and one controllable light) and your own

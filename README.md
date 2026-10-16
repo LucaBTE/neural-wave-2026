@@ -4,6 +4,22 @@ Build a pipeline that turns an amateur phone photo of a garment into a clean stu
 packshot. This repo has the official scorer, two baselines, and the scripts to carve a holdout,
 self-score and validate a submission.
 
+## At a glance
+
+* **Build:** a pipeline that turns a smartphone photo of a garment into a studio flat-lay packshot
+  on a white background. Custom training is optional.
+* **Hand in:**
+  * one output image per garment, in the layout `submissions/<team>/<garment_id>/front.png`: all
+    27 dev ids (for the leaderboard rounds) and all 16 on-site garments `g01`–`g16`;
+  * the runnable pipeline source, with the instructions to run it;
+  * the capture-protocol write-up.
+* **Deadline:** submit by Sunday 18 October 2026, 11:00 CEST.
+* **Channel:** hand in through the channel the organisers announce at the event.
+* **Resources:** a fal.ai key with a $100 budget and an OpenCode Go key with a $10 budget, per team.
+* **Rule:** outputs must come from your own pipeline, using the garment's own photos. Copying,
+  recolouring or compositing the example targets or any retrieved product image disqualifies that
+  garment. Finalists' outputs are checked against their pipeline.
+
 The challenge runs at Neural Wave, 16 to 18 October 2026, USI Lugano. You own the whole loop:
 how the garment is photographed is part of your solution, not a fixed input.
 
@@ -21,11 +37,15 @@ You are scored two ways:
   your pipeline on the phone photos we supply or on your own on-site shots. The scorer ranks the
   teams; the finalists (number announced at the event) go to a Sartiq jury, and teams tied at that cutoff all advance.
 
-The full problem statement is in the challenge document (`Sartiq_Neural_Wave_2026_Challenge.pdf`).
+The full problem statement is in the challenge document,
+[`docs/Sartiq_Neural_Wave_2026_Challenge.pdf`](docs/Sartiq_Neural_Wave_2026_Challenge.pdf).
 
 ---
 
 ## Quickstart
+
+Prerequisites: [`uv`](https://docs.astral.sh/uv/getting-started/installation/) and `git`. Run the
+commands below from the repository root.
 
 ```bash
 git clone https://github.com/shootify-io/neural-wave-2026
@@ -36,9 +56,10 @@ uv venv --python 3.12
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e 'scorer[test]'
 
-# 2. dataset: download https://drive.google.com/drive/folders/1INEK1AxsB9Tt79mabm8ElxNAZLjWwXL3?usp=sharing, unzip it next to the repo so it sits at
+# 2. dataset: download https://drive.google.com/drive/folders/1INEK1AxsB9Tt79mabm8ElxNAZLjWwXL3?usp=sharing and save sartiq_neural_wave_2026.zip next to the clone
+#    (in its parent directory). From the repository root, unzip it there so the data sits at
 #    ../sartiq_neural_wave_2026 (see docs/DATA.md)
-unzip sartiq_neural_wave_2026.zip -d ..
+unzip ../sartiq_neural_wave_2026.zip -d ..
 
 # 3. carve a holdout out of the example pairs
 .venv/bin/python scripts/make_holdout.py \
@@ -73,15 +94,16 @@ env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli pair \
 
 ## What you deliver
 
-1. Your pipeline, runnable on the 16 on-site garments.
+1. Your pipeline source, runnable on the 16 on-site garments, with the instructions to run it.
 2. A short capture-protocol write-up: how a garment must be shot for your system to work, so
    someone else can reproduce it from a cold start.
-3. Your predictions, in the fixed layout `submissions/<team>/<garment_id>/front.<png|jpg|jpeg|webp>`
-   (`docs/SUBMISSION.md`). Submit them for dev during the event and for the on-site garments at
-   judging.
+3. Your output images, one per garment, in the fixed layout
+   `submissions/<team>/<garment_id>/front.<png|jpg|jpeg|webp>`
+   ([docs/SUBMISSION.md](docs/SUBMISSION.md)). Submit them for every dev id during the event and
+   for all 16 on-site garments `g01`–`g16` at judging. A garment you do not submit scores 0.
 
-Ranking rules are in `docs/SCORING.md`. Shooting hints for the on-site set are in
-`docs/CAPTURE_GUIDE.md`. They are hints; the protocol is yours to design.
+Ranking rules are in [docs/SCORING.md](docs/SCORING.md). Shooting hints for the on-site set are in
+[docs/CAPTURE_GUIDE.md](docs/CAPTURE_GUIDE.md). They are hints; the protocol is yours to design.
 
 ---
 
@@ -98,7 +120,7 @@ Sartiq staff member first if you are unsure what you have left. Keys go in envir
 only: never in the repo, never in a submission, never in your git history. `.env` is listed in
 `.gitignore`; keep it out of your commits.
 
-The organisers suggest OpenCode (https://opencode.ai) as the coding harness. It is an agent that
+The organisers suggest [OpenCode](https://opencode.ai) as the coding harness. It is an agent that
 runs in your terminal and edits code in your repo, and it is not required. To install it and
 connect the key:
 
@@ -116,19 +138,19 @@ provider or harness you pick.
 
 ## Repo map
 
-```
-README.md                  this file
-docs/DATA.md               dataset layout, the example pairs (train/), dev, test, usage rules
-docs/SCORING.md            the exact scoring math, status rules, how to self-score
-docs/CAPTURE_GUIDE.md      practical hints for the on-site capture
-docs/SUBMISSION.md         submission format, timing, what happens if a file is missing
-docs/FAQ.md                short answers to the questions everyone asks
-baselines/                 identity + hosted image model, as reference points
-scripts/make_holdout.py    split a holdout out of the example pairs
-scripts/eval_val.py        score predictions against a holdout with the official scorer
-scripts/make_submission.py validate a submission layout (+ image sanity)
-scorer/                    the official scorer (frozen); CLI + library
-```
+* [README.md](README.md) — this file
+* [docs/DATA.md](docs/DATA.md) — dataset layout, the example pairs (train/), dev, test, usage rules
+* [docs/SCORING.md](docs/SCORING.md) — the exact scoring math, status rules, how to self-score
+* [docs/CAPTURE_GUIDE.md](docs/CAPTURE_GUIDE.md) — practical hints for the on-site capture
+* [docs/SUBMISSION.md](docs/SUBMISSION.md) — submission format, timing, what happens if a file is missing
+* [docs/FAQ.md](docs/FAQ.md) — short answers to the questions everyone asks
+* [docs/Sartiq_Neural_Wave_2026_Challenge.pdf](docs/Sartiq_Neural_Wave_2026_Challenge.pdf) — the
+  challenge document (full problem statement)
+* [baselines/](baselines/) — identity + hosted image model, as reference points
+* [scripts/make_holdout.py](scripts/make_holdout.py) — split a holdout out of the example pairs
+* [scripts/eval_val.py](scripts/eval_val.py) — score predictions against a holdout with the official scorer
+* [scripts/make_submission.py](scripts/make_submission.py) — validate a submission layout (+ image sanity)
+* [scorer/](scorer/) — the official scorer (frozen); CLI + library
 
 ---
 
@@ -153,7 +175,10 @@ word. The weights are frozen before submissions open and are never fitted to sub
   it is processing, not distribution, and it is what the hosted baseline does.
 * Submit only work your own pipeline produced from the provided inputs or your own on-site photos.
   Retrieving product images of a garment (web search, brand sites, reverse image search) and
-  submitting or compositing them disqualifies that garment.
+  submitting or compositing them disqualifies that garment. Outputs must be generated by your
+  pipeline from the garment's own photos; copying, recolouring or compositing the supplied example
+  targets or any retrieved product image is not allowed and disqualifies that garment, and
+  finalists' outputs are checked against their pipeline.
 * Bring your own smartphone. The on-site set (backdrop and one controllable light) is shared.
 * The budget is the two keys handed out at kickoff (see "What you get"): a fal.ai key for hosted
   image models and an OpenCode Go key for the coding agent. Both are per team and for challenge work
@@ -172,5 +197,5 @@ word. The weights are frozen before submissions open and are never fitted to sub
 
 ## Licence
 
-The code in this repository and the dataset are provided under the Neural Wave 2026 hackathon terms
-of service. Read them before reusing either outside the event.
+The code in this repository and the dataset are provided under the hackathon terms of service
+(available from the Neural Wave organisers). Read them before reusing either outside the event.

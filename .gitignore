@@ -36,6 +36,11 @@ scores.jsonl
 review.csv
 garments.csv
 
+# ---- scorer debug contact sheets (debug --out sheet_<id>.jpg) ----
+sheet_*.jpg
+sheet_*.jpeg
+sheet_*.png
+
 # ---- archives ----
 *.zip
 *.tar

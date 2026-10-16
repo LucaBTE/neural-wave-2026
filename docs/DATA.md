@@ -9,8 +9,11 @@ to the repo, so the dataset root sits as a sibling:
 └── neural-wave-2026/            this repository (you may have cloned it under any name)
 ```
 
+Put the downloaded `sartiq_neural_wave_2026.zip` in `<parent>` (next to the clone), and run this
+from the repository root:
+
 ```bash
-unzip sartiq_neural_wave_2026.zip -d ..
+unzip ../sartiq_neural_wave_2026.zip -d ..
 ```
 
 Every path inside a manifest is relative to the dataset root.
@@ -24,7 +27,7 @@ sartiq_neural_wave_2026/
 ├── README.md
 ├── train/
 │   ├── pairs.jsonl                          one line per pair
-│   └── t0001/input_1.jpg input_2.jpg ... target.jpg
+│   └── t0001/input_1.jpg [input_2.jpg ...] target.jpg
 ├── dev/
 │   ├── inputs.jsonl                         one line per garment, no target
 │   └── d001/input_1.jpg ...
@@ -41,16 +44,17 @@ All images are JPEG with metadata stripped.
 
 ## 2. Manifest schema
 
-`train/pairs.jsonl`, one JSON object per line:
+`train/pairs.jsonl`, one JSON object per line. The first line is:
 
 ```jsonl
-{"pair_id": "t0001", "inputs": ["train/t0001/input_1.jpg", "train/t0001/input_2.jpg"], "target": "train/t0001/target.jpg"}
+{"pair_id": "t0001", "inputs": ["train/t0001/input_1.jpg"], "target": "train/t0001/target.jpg"}
 ```
 
-`inputs` is a list of one or more amateur photos of the garment. `target` is the studio flat-lay
-packshot you produce.
+`inputs` is a list of one or more amateur photos of the same garment. The number of photos varies
+from row to row: some pairs have a single input, others have up to five. `target` is the studio
+flat-lay packshot you produce.
 
-`dev/inputs.jsonl` and `test/inputs.jsonl`, one line per garment:
+`dev/inputs.jsonl` and `test/inputs.jsonl`, one line per garment. The first line of `dev` is:
 
 ```jsonl
 {"garment_id": "d001", "view": "front", "inputs": ["dev/d001/input_1.jpg"]}
@@ -111,7 +115,7 @@ did not tune on:
 
 That writes `holdout/train.jsonl` and `holdout/val.jsonl` (same schema, paths still relative to
 the dataset root), then score predictions on `val.jsonl` with `scripts/eval_val.py`. Details and
-an example in `docs/SCORING.md`.
+an example in [docs/SCORING.md](SCORING.md).
 
 One warning that a random split will not save you from: pairs can share a garment. If the same
 garment lands in both your holdout and your training slice, your holdout score is optimistic.
@@ -130,7 +134,8 @@ during the event, including unsupervised adaptation, is allowed.
    and it is what the hosted baseline does.
 2. Do not republish the amateur photos. They can contain faces and third-party content.
 3. Do not use the data to release a public model without Sartiq's written agreement. The code
-   you write is yours (see the challenge document's IP section); the data is not.
+   you write is yours (see the IP section of
+   [the challenge document](Sartiq_Neural_Wave_2026_Challenge.pdf)); the data is not.
 4. You may use the dev and the test inputs for anything during the event, including unsupervised
    adaptation. There is no rule against it.
 5. Delete your local copy when the event is over, unless Sartiq says otherwise. Outputs you

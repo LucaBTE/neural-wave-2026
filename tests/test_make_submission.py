@@ -340,3 +340,63 @@ def test_missing_frozen_scorer_fails_clearly(dataset, tmp_path):
                           capture_output=True, text=True, env=env)
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "frozen scorer" in proc.stderr, proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Fairness review (r4): a symlinked folder named front.<ext>, several front.*,
+# and the extension precedence the scorer picks must match the scorer exactly.
+# --------------------------------------------------------------------------- #
+
+
+def test_directory_symlink_named_front_is_an_error(dataset, tmp_path):
+    """A *directory* symlink named front.png beside a valid front.jpg must fail, not pass.
+
+    The scorer reads the PNG link (its discovery counts ``is_symlink()``), scores the garment
+    invalid/0; the checker used to skip it as a directory and exit 0.
+    """
+    info = dataset
+    subs = tmp_path / "submissions"
+    d = subs / "teamA" / "d001"
+    d.mkdir(parents=True)
+    _mock.synth_image(d / "front.jpg", 11)
+    real_dir = tmp_path / "elsewhere"
+    real_dir.mkdir()
+    os.symlink(real_dir, d / "front.png")  # a directory symlink with the front stem
+    proc = _mock.run_cmd(["scripts/make_submission.py", "--submissions", subs,
+                          "--dataset", info["root"]], cwd=tmp_path)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    assert "symlink" in out, out
+    assert "front.png" in out, out
+
+
+def test_two_front_files_are_an_error_naming_the_scorer_pick(dataset, tmp_path):
+    """Two front.* with different extensions is an error that names the file the scorer reads."""
+    info = dataset
+    subs = tmp_path / "submissions"
+    d = subs / "teamA" / "d001"
+    d.mkdir(parents=True)
+    _mock.synth_image(d / "front.jpg", 12)
+    _mock.synth_image(d / "front.png", 13)
+    proc = _mock.run_cmd(["scripts/make_submission.py", "--submissions", subs,
+                          "--dataset", info["root"]], cwd=tmp_path)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    assert "multiple front.* files" in out, out
+    assert "front.png" in out, out  # png < jpg, so this is the file the scorer would read
+    assert "front.jpg" in out, out  # ... and the stale one, so the fix is obvious
+
+
+def test_front_extension_precedence_matches_the_scorer(dataset, tmp_path):
+    """The order used to name the scorer's pick must be the scorer's own IMAGE_EXTS."""
+    code = (
+        "import pathlib, sys\n"
+        "sys.path.insert(0, str(pathlib.Path('scripts')))\n"
+        "import make_submission as m\n"
+        "from sartiq_score.batch import IMAGE_EXTS\n"
+        "assert tuple(m.SCORER_IMAGE_EXTS) == tuple(IMAGE_EXTS), (m.SCORER_IMAGE_EXTS, IMAGE_EXTS)\n"
+        "print('|'.join(m.SCORER_IMAGE_EXTS))\n"
+    )
+    proc = _mock.run_cmd(["-c", code], cwd=_mock.REPO)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == ".png|.jpg|.jpeg|.webp|.heic"

@@ -13,8 +13,12 @@ Checks:
     (with ``file:line``) unless you pass ``--no-dataset``;
   * the required ``front`` view is present (extra views -> warning);
   * extension is one of png / jpg / jpeg / webp;
-  * the team folder, the garment folder and the file are real (a symlinked team root,
-    garment folder or file is an error);
+  * *any* symlink anywhere in the team tree -- a team folder, a garment folder, a file, or a
+    directory symlink -- is an error, and it is detected before any directory is skipped: the
+    scorer never follows a symlink and would score the garment 0;
+  * exactly one ``front.*`` per garment: several are an error that names the file the frozen
+    scorer would actually read, using the scorer's own extension precedence
+    (``png < jpg < jpeg < webp < heic``);
   * helper directories the hosted baseline's dry run creates (``_requests/``) are not teams and
     are skipped; any other underscore-prefixed folder (``_mylab``) is an ordinary team;
   * the file decodes fully and passes the frozen scorer's invalid rules: readable,
@@ -35,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -67,6 +72,9 @@ try:
         is_uniform_submission as _is_uniform_submission,
         luma_std as _luma_std,
     )
+    # The scorer's own extension precedence, so "which front.* does the scorer read?" is answered
+    # by the scorer, not by a hand-copied order that could drift (png < jpg < jpeg < webp < heic).
+    from sartiq_score.batch import IMAGE_EXTS as _SCORER_IMAGE_EXTS  # type: ignore
 except Exception as _exc:  # noqa: BLE001
     _scorer_import_error = f"{type(_exc).__name__}: {_exc}"
     _load_image = None
@@ -74,8 +82,13 @@ except Exception as _exc:  # noqa: BLE001
     _UNIFORM_LUMA_STD = 4.0
     _is_uniform_submission = None
     _luma_std = None
+    _SCORER_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".heic")
 
 UNIFORM_LUMA_STD = float(_UNIFORM_LUMA_STD)
+#: Every extension the frozen scorer recognises for a view, in its own precedence order. A
+#: submission may only use :data:`ALLOWED_EXTS`, but a ``front.*`` with a scorer extension this
+#: script rejects (e.g. HEIC) still counts when naming the file the scorer would read.
+SCORER_IMAGE_EXTS: tuple[str, ...] = tuple(_SCORER_IMAGE_EXTS)
 
 
 def require_frozen_scorer() -> None:
@@ -84,8 +97,8 @@ def require_frozen_scorer() -> None:
         return
     print(
         "error: make_submission.py needs the frozen scorer "
-        "(sartiq_score.io and sartiq_score.aggregate) so its checks match official "
-        f"scoring, but the import failed: {_scorer_import_error}\n"
+        "(sartiq_score.io, sartiq_score.aggregate and sartiq_score.batch) so its checks match "
+        f"official scoring, but the import failed: {_scorer_import_error}\n"
         "Run it with the repo's interpreter and the scorer importable, e.g.:\n"
         "  env -u PYTHONPATH .venv/bin/python scripts/make_submission.py ...\n"
         "There is no Pillow fallback on purpose: a decode that disagrees with the "
@@ -173,28 +186,58 @@ def check_image(path: Path) -> dict:
             "problems": problems, "warnings": warnings}
 
 
-def _front_and_extras(directory: Path) -> tuple[Path | None, list[str], list[str]]:
-    """Return ``(front_path, extra_view_stems, disallowed_ext_names)`` for one garment dir."""
-    front: list[Path] = []
+def _tree_symlinks(root: Path) -> list[Path]:
+    """Every symlink under ``root`` -- files and directories -- checked before any directory is
+    skipped.
+
+    The scorer's discovery reads ``is_symlink() or is_file()``, so a symlink named like an image
+    counts even when it points at a directory. ``os.walk(followlinks=False)`` lists a symlinked
+    directory without descending into it, so this never follows a link out of the team tree; it
+    just records it.
+    """
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in (*dirnames, *filenames):
+            path = Path(dirpath) / name
+            if path.is_symlink():
+                found.append(path)
+    return sorted(found)
+
+
+def _front_and_extras(directory: Path) -> tuple[list[Path], list[str], list[str]]:
+    """Ordered ``front.*`` candidates for one garment dir.
+
+    Returns ``(candidates, extra_view_stems, disallowed_names)``. A candidate is any entry the
+    frozen scorer would treat as this view's submission image: a real file or a symlink (the
+    scorer reads ``is_symlink() or is_file()``), with an extension it recognises, in the scorer's
+    own ``IMAGE_EXTS`` precedence order, so ``candidates[0]`` is exactly the file the scorer
+    reads. ``disallowed_names`` are ``front.*`` entries a submission may not use: an extension the
+    scorer reads but the rules forbid (HEIC) or one it ignores (.bmp).
+
+    The symlink bit is tested before a directory is skipped, so a directory symlink named
+    ``front.png`` is a candidate here (and an error upstream) instead of being hidden as a folder.
+    """
+    candidates: list[Path] = []
     extras: list[str] = []
     disallowed: list[str] = []
     for entry in sorted(directory.iterdir()):
         if entry.name.startswith("."):
             continue
-        if entry.is_dir():
-            continue
+        if not (entry.is_symlink() or entry.is_file()):
+            continue  # a real directory (or other non-image entry): the scorer skips it too
         ext = entry.suffix.lower()
         if entry.stem == REQUIRED_VIEW:
             if ext in ALLOWED_EXTS:
-                front.append(entry)
+                candidates.append(entry)
+            elif ext in SCORER_IMAGE_EXTS:
+                candidates.append(entry)  # the scorer reads it; a submission may not submit it
+                disallowed.append(entry.name)
             else:
                 disallowed.append(entry.name)
         elif ext in ALLOWED_EXTS:
             extras.append(entry.stem)
-    if not front:
-        return None, sorted(set(extras)), disallowed
-    order = sorted(front, key=lambda p: ALLOWED_EXTS.index(p.suffix.lower()))
-    return order[0], sorted(set(extras)), disallowed
+    candidates.sort(key=lambda p: SCORER_IMAGE_EXTS.index(p.suffix.lower()))
+    return candidates, sorted(set(extras)), disallowed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -290,6 +333,15 @@ def main(argv: list[str] | None = None) -> int:
             report[team] = {"garments": garments, "n_garments": 0, "n_images": 0,
                             "dev_submitted": 0, "test_submitted": 0}
             continue
+        # Reject any symlink anywhere in the team tree, before the walk below skips directories:
+        # a directory symlink named like an image would otherwise be hidden, while the scorer reads
+        # it (is_symlink() counts) and scores the garment 0.
+        for link in _tree_symlinks(team_dir):
+            rel = link.relative_to(team_dir).as_posix()
+            errors.append(
+                f"{team}/{rel}: symlink => INVALID (copy the real file; the scorer never follows "
+                f"a symlink)"
+            )
         garment_dirs = [d for d in sorted(team_dir.iterdir())
                         if not d.name.startswith(".") and (d.is_dir() or d.is_symlink())]
         if not garment_dirs:
@@ -307,34 +359,43 @@ def main(argv: list[str] | None = None) -> int:
                 garments[gid] = entry
                 errors.extend(f"{team}/{gid}: {p}" for p in entry["problems"])
                 continue
-            front, extras, disallowed = _front_and_extras(gdir)
+            candidates, extras, disallowed = _front_and_extras(gdir)
             if disallowed:
                 entry["problems"].append(
                     f"front view has a disallowed extension ({', '.join(disallowed)}) "
                     f"=> INVALID (use {'/'.join(e.lstrip('.') for e in ALLOWED_EXTS)})"
                 )
-            if front is None:
+            if not candidates:
                 entry["problems"].append("no front view => INVALID (front.<png|jpg|jpeg|webp> required)")
-            elif front.is_symlink():
-                # Symlink check before any stat(): a dangling link must report cleanly.
-                entry["problems"].append("front is a symlink => INVALID (copy the real file)")
             else:
-                checked = check_image(front)
-                info: dict = {"file": front.name}
-                try:
-                    info["bytes"] = front.stat().st_size
-                except OSError as exc:
-                    info["bytes"] = None
-                    entry["problems"].append(f"front is unreadable ({exc}) => INVALID")
-                if checked["size"]:
-                    info["size"] = checked["size"]
-                if checked["luma_std"] is not None:
-                    info["luma_std"] = checked["luma_std"]
-                entry["problems"].extend(checked["problems"])
-                warnings.extend(f"{team}/{gid}: {w}" for w in checked["warnings"])
-                entry["views"][REQUIRED_VIEW] = info
-                team_submitted.add(gid)
-                n_images += 1
+                picked = candidates[0]  # the file the frozen scorer itself would read
+                if len(candidates) > 1:
+                    order = " < ".join(e.lstrip(".") for e in SCORER_IMAGE_EXTS)
+                    entry["problems"].append(
+                        f"multiple front.* files ({', '.join(p.name for p in candidates)}); "
+                        f"the scorer reads {picked.name} (extension order {order}) "
+                        f"=> ERROR (keep only {picked.name})"
+                    )
+                if picked.is_symlink():
+                    # Symlink check before any stat(): a dangling link must report cleanly.
+                    entry["problems"].append("front is a symlink => INVALID (copy the real file)")
+                else:
+                    checked = check_image(picked)
+                    info: dict = {"file": picked.name}
+                    try:
+                        info["bytes"] = picked.stat().st_size
+                    except OSError as exc:
+                        info["bytes"] = None
+                        entry["problems"].append(f"front is unreadable ({exc}) => INVALID")
+                    if checked["size"]:
+                        info["size"] = checked["size"]
+                    if checked["luma_std"] is not None:
+                        info["luma_std"] = checked["luma_std"]
+                    entry["problems"].extend(checked["problems"])
+                    warnings.extend(f"{team}/{gid}: {w}" for w in checked["warnings"])
+                    entry["views"][REQUIRED_VIEW] = info
+                    team_submitted.add(gid)
+                    n_images += 1
             if extras:
                 warnings.append(f"{team}/{gid}: extra view(s) {', '.join(extras)} ignored (front is required)")
             garments[gid] = entry

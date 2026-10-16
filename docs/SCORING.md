@@ -104,7 +104,7 @@ The scorer is generic over views, but in this challenge the only required view i
 reference and submission uses `front.<png|jpg|jpeg|webp>`.
 
 dev ids and test ids never collide, so one team folder can hold both. PNG is the safe default
-(lossless). Full rules and a validator are in `docs/SUBMISSION.md`.
+(lossless). Full rules and a validator are in [docs/SUBMISSION.md](SUBMISSION.md).
 ---
 
 ## 5. Aggregation: garment scores, team scores, ties
@@ -209,7 +209,8 @@ python -m sartiq_score.cli batch --refs <refs> --subs submissions \
 
 The automated ranking picks the finalists (number announced at the event). Teams tied at the finalist
 cutoff all advance, so the jury round can hold more teams than that. The Sartiq panel then
-judges the finalists on commercial usability, criteria unchanged from the challenge document:
+judges the finalists on commercial usability, criteria unchanged from
+[the challenge document](Sartiq_Neural_Wave_2026_Challenge.pdf):
 
 * colour and material fidelity to the real garment,
 * silhouette and geometry correctness,
