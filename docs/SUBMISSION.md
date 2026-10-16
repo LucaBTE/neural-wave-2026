@@ -125,7 +125,7 @@ done.
 
 - [ ] one folder per team, one folder per garment, spelled exactly like the manifest
 - [ ] every id is in the dev or test manifest (no unknown ids), no symlinked folders or files
-- [ ] one image for every on-site garment `g01`–`g16` and every dev id, whether or not you
+- [ ] one image for every on-site garment `g01`–`g15` and every dev id, whether or not you
       photographed the garment yourself (a missing garment scores 0)
 - [ ] PNG/JPG/WebP, single frame, real file, <= 100 MB, >= 256 px short side,
       <= 12000 px long side, aspect <= 3:1, not a flat field (luma standard deviation >= 4/255)

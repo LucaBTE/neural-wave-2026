@@ -36,7 +36,7 @@ sartiq_neural_wave_2026/
     └── g01/input_1.jpg ...
 ```
 
-Counts: 382 train pairs, 27 dev garments, 16 test garments.
+Counts: 382 train pairs, 27 dev garments, 15 test garments.
 
 All images are JPEG with metadata stripped.
 
@@ -61,7 +61,7 @@ flat-lay packshot you produce.
 ```
 
 Ids are opaque and assigned after a seeded shuffle: train `t0001...`, dev `d001...`, test
-`g01...g16`. Nothing else is in a row. There is no field that tells you where an image came
+`g01...g15`. Nothing else is in a row. There is no field that tells you where an image came
 from or how it was made.
 
 ---
@@ -92,8 +92,8 @@ references stay private before and after the event.
 
 ## 5. test, the on-site set
 
-The official ranking is on 16 physical garments we bring to the venue. They are labelled g01 to
-g16, and each physical garment carries a tag with its id. `test/inputs.jsonl` lists phone photos
+The official ranking is on 15 physical garments we bring to the venue. They are labelled g01 to
+g15, and each physical garment carries a tag with its id. `test/inputs.jsonl` lists phone photos
 of each garment, so you can see what one looks like before you stand in front of it.
 
 You may use those supplied phone photos as inputs, and you can also photograph the garments

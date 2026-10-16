@@ -5,7 +5,7 @@ https://drive.google.com/drive/folders/1INEK1AxsB9Tt79mabm8ElxNAZLjWwXL3?usp=sha
 `../sartiq_neural_wave_2026`. Details in [docs/DATA.md](DATA.md).
 
 ## What exactly am I scored on?
-Two things. dev drives a live leaderboard during the event, and the 16 on-site garments drive the
+Two things. dev drives a live leaderboard during the event, and the 15 on-site garments drive the
 official ranking. Not the example pairs.
 
 ## How does the leaderboard work?
@@ -114,7 +114,7 @@ first use. Use `--jobs 4`.
 Submit your best output anyway. A missing view or garment scores 0 and stays in the average; a
 wrong guess usually scores better than nothing.
 
-## Can I see the 16 references?
+## Can I see the 15 references?
 No. The test references stay private before and after the event. `test/inputs.jsonl` points at
 phone photos we took of each garment, so you know what it looks like before you are standing in
 front of it. You may use those phone photos as inputs; they are not the reference.

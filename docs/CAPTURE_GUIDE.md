@@ -5,10 +5,10 @@ captures cleverly with a simple pipeline can beat a sophisticated one fed bad in
 lists the things that will otherwise cost you points for reasons that have nothing to do with your
 pipeline.
 
-You are scored on flat-lay packshots of the 16 on-site garments. Your inputs are your own photos,
+You are scored on flat-lay packshots of the 15 on-site garments. Your inputs are your own photos,
 shot on the day with the set Sartiq provides (backdrop and one controllable light) and your own
 smartphone, or the phone photos Sartiq supplies. Both are allowed. Each garment carries a tag with
-its id, g01 to g16.
+its id, g01 to g15.
 
 ---
 

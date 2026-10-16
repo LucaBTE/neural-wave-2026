@@ -10,7 +10,7 @@ self-score and validate a submission.
   on a white background. Custom training is optional.
 * **Hand in:**
   * one output image per garment, in the layout `submissions/<team>/<garment_id>/front.png`: all
-    27 dev ids (for the leaderboard rounds) and all 16 on-site garments `g01`–`g16`;
+    27 dev ids (for the leaderboard rounds) and all 15 on-site garments `g01`–`g15`;
   * the runnable pipeline source, with the instructions to run it;
   * the capture-protocol write-up.
 * **Deadline:** submit by Sunday 18 October 2026, 11:00 CEST.
@@ -33,7 +33,7 @@ You are scored two ways:
 
 * dev, a live leaderboard. dev ships inputs without targets. The organisers score your dev
   submissions at regular intervals between Friday 16 October 19:30 and Sunday 18 October 10:00 CEST and post team totals only.
-* test, the official ranking. 16 physical garments we bring on site, labelled g01 to g16. You run
+* test, the official ranking. 15 physical garments we bring on site, labelled g01 to g15. You run
   your pipeline on the phone photos we supply or on your own on-site shots. The scorer ranks the
   teams; the finalists (number announced at the event) go to a Sartiq jury, and teams tied at that cutoff all advance.
 
@@ -94,13 +94,13 @@ env -u PYTHONPATH .venv/bin/python -m sartiq_score.cli pair \
 
 ## What you deliver
 
-1. Your pipeline source, runnable on the 16 on-site garments, with the instructions to run it.
+1. Your pipeline source, runnable on the 15 on-site garments, with the instructions to run it.
 2. A short capture-protocol write-up: how a garment must be shot for your system to work, so
    someone else can reproduce it from a cold start.
 3. Your output images, one per garment, in the fixed layout
    `submissions/<team>/<garment_id>/front.<png|jpg|jpeg|webp>`
    ([docs/SUBMISSION.md](docs/SUBMISSION.md)). Submit them for every dev id during the event and
-   for all 16 on-site garments `g01`–`g16` at judging. A garment you do not submit scores 0.
+   for all 15 on-site garments `g01`–`g15` at judging. A garment you do not submit scores 0.
 
 Ranking rules are in [docs/SCORING.md](docs/SCORING.md). Shooting hints for the on-site set are in
 [docs/CAPTURE_GUIDE.md](docs/CAPTURE_GUIDE.md). They are hints; the protocol is yours to design.
