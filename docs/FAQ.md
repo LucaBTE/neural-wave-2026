@@ -123,5 +123,5 @@ Yes, per the challenge document's IP section. Sartiq reserves the right to use a
 commercially. The dataset is not yours: keep it internal and delete it afterwards.
 
 ## Who do I ask?
-Luca Pasini (luca.pasini@sartiq.com) and Felipe Cardoso (felipe.cardoso@sartiq.com), or
+Felipe Cardoso (felipe.cardoso@sartiq.com) and Luca Pasini (luca.pasini@sartiq.com), or
 corner a Sartiq person at the venue.
