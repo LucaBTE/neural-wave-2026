@@ -37,24 +37,17 @@ Run from `neural-wave-2026/` after setup
 1. Run the pipeline on every dev & test garment.
 
 ```bash
-for row in $(.venv/bin/python -c "import json;[print(r['garment_id']+','+r['inputs'][0]) for r in map(json.loads, open('sartiq_neural_wave_2026/dev/inputs.jsonl'))]"); do
-    id=${row%%,*}; img=sartiq_neural_wave_2026/${row#*,}
-    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py "$img" || {
+.venv/bin/python -c "import json;[print(r['garment_id'],*['sartiq_neural_wave_2026/'+p for p in r['inputs']]) for s in ('dev','test') for r in map(json.loads, open(f'sartiq_neural_wave_2026/{s}/inputs.jsonl'))]" | while read id first rest; do
+    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py --views $first $rest || {
   echo "FAIL $id"; continue; }
     mkdir -p submissions/btc/$id
-    cp dev/btc-sartiq/validation/${id}_$(basename "${img%.*}")_studio.png submissions/btc/$id/front.png
-  done
-
-for row in $(.venv/bin/python -c "import json;[print(r['garment_id']+','+r['inputs'][0]) for r in map(json.loads, open('sartiq_neural_wave_2026/test/inputs.jsonl'))]"); do
-    id=${row%%,*}; img=sartiq_neural_wave_2026/${row#*,}
-    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py "$img" || {
-  echo "FAIL $id"; continue; }
-    mkdir -p submissions/btc/$id
-    cp dev/btc-sartiq/validation/${id}_$(basename "${img%.*}")_studio.png submissions/btc/$id/front.png
+    cp dev/btc-sartiq/validation/${id}_$(basename ${first%.*})_studio.png submissions/btc/$id/front.png
   done
 ```
 
-5 fal calls per garment, about 210 for all 42
+`--views` sends all the garment's photos as views of one garment (first is primary, max 5)
+
+Up to 7 fal calls per garment, about 300 for all 42
 
 2. Validate and zip:
 
