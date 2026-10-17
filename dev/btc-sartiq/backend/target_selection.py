@@ -22,7 +22,7 @@ def assess_product_selection(target, selection, image_size):
     width_coverage = (actual[2] - actual[0]) / max(1, expected[2] - expected[0])
     height_coverage = (actual[3] - actual[1]) / max(1, expected[3] - expected[1])
     approved = (selection['strategy'] == 'classified_product' and
-                bool(target.get('category')) and iou >= .7 and
+                bool(target.get('category')) and target.get('identity_supported', True) and iou >= .7 and
                 width_coverage >= .8 and height_coverage >= .8)
     return {'approved': approved, 'method': 'detector_mask_agreement',
             'box_iou': round(iou, 4), 'width_coverage': round(width_coverage, 4),

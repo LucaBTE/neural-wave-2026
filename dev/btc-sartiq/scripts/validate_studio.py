@@ -1,4 +1,4 @@
-"""Live fal validation: up to seven paid inference requests per uncached input photo."""
+"""Live fal validation: six default inferences; up to eight with duplicate repair."""
 import argparse
 import json
 import sys

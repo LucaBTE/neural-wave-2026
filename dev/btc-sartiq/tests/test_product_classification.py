@@ -91,6 +91,22 @@ def test_printed_garment_words_do_not_override_actual_category():
     assert parsed['kind'] == 'other'
 
 
+def test_echoed_schema_is_not_accepted_as_a_product_description():
+    parsed = classification.parse_target(json.dumps({
+        'label':'short English product name with distinguishing visual attributes',
+        'category':'garment', 'kind':'garment', 'confidence':.99,
+        'description':'Short English product name with distinguishing visual attributes'}))
+    assert parsed['label'] == 'garment'
+    assert parsed['confidence'] is None
+    assert parsed['review_required'] and not parsed['identity_supported']
+    assert 'description' not in parsed
+    from target_selection import assess_product_selection
+    selection = {'bbox':[25,20,75,80], 'strategy':'classified_product'}
+    parsed['bbox'] = [.25,.2,.75,.8]
+    # Perfect geometry cannot validate a placeholder identity.
+    assert not assess_product_selection(parsed, selection, (100,100))['approved']
+
+
 @pytest.mark.parametrize('category', [None, '', 'print', 'portrait', 'logo', 'text'])
 def test_printed_title_without_physical_category_cannot_become_target(category):
     data = {'label': 'Jennie Ruby', 'kind': 'garment', 'confidence': .95}
@@ -122,6 +138,30 @@ def test_classifier_uses_full_scene_and_caches_by_pixels_and_prompt(tmp_path, mo
     prompt.write_text('Identify ONE main product more carefully')
     assert not classification.classify_product(image, run, extract_description)['cache_hit']
     assert len(calls) == 3
+
+
+def test_classifier_sees_all_views_in_one_request_and_invalidates_changed_details():
+    import base64
+    import io
+    main = Image.new('RGB', (100, 150), 'black')  # shoulder close-up
+    full = Image.new('RGB', (200, 300), 'red')
+    calls = []
+    def run(model, arguments):
+        calls.append(arguments)
+        preview = Image.open(io.BytesIO(base64.b64decode(arguments['image_url'].split(',')[1])))
+        assert preview.width > preview.height  # multi-panel board, not main alone
+        assert 'Main may be a cropped detail' in arguments['prompt']
+        observed = preview.getpixel((800,150))  # complete view in right panel
+        assert max(abs(a-b) for a,b in zip(observed, full.getpixel((100,150)))) < 15
+        return {'output':json.dumps(target())}
+    before = main.tobytes(), full.tobytes()
+    assert not classification.classify_product(main, run, extract_description, [full])['cache_hit']
+    assert classification.classify_product(main, run, extract_description, [full])['cache_hit']
+    assert len(calls) == 1
+    full.paste('yellow', (0,0,200,300))
+    assert not classification.classify_product(main, run, extract_description, [full])['cache_hit']
+    assert len(calls) == 2
+    assert main.tobytes() == before[0]
 
 
 def scene_masks():

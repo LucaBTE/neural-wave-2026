@@ -7,7 +7,7 @@ import math
 import re
 from pathlib import Path
 
-from garment_analysis import DEFAULT_MODEL, CACHE_TTL, CACHE_SIZE
+from garment_analysis import DEFAULT_MODEL, CACHE_TTL, CACHE_SIZE, prepare_multiview_analysis
 from request_reuse import ReuseCache
 
 CLASSIFICATION_MODEL = DEFAULT_MODEL
@@ -100,6 +100,13 @@ def parse_target(text):
               'confidence': confidence, 'review_required': review}
     if kind != model_kind:
         result.update(model_kind=model_kind, kind_source='physical_category')
+    if 'short english product name' in label.casefold() or 'distinguishing visual attributes' in label.casefold():
+        result.update(label=category, confidence=None, review_required=True, identity_supported=False)
+    description = target.get('description')
+    if (isinstance(description, str) and description.strip() and
+            not any(phrase in description.casefold() for phrase in
+                    ('short english product name', 'distinguishing visual attributes'))):
+        result['description'] = ' '.join(description.split())[:600]
     return result
 
 
@@ -158,11 +165,20 @@ def locate_product(image, target, run_model):
             'localization_cache_status': reuse}
 
 
-def classify_product(image, run_model, extract_text):
+def classify_product(image, run_model, extract_text, additional_images=None):
     prompt = PROMPT_PATH.read_text(encoding='utf-8').strip()
     if not prompt:
         raise ValueError('Product classification prompt must not be empty')
+    extra = additional_images or []
+    if len(extra) > 4:
+        raise ValueError('Maximum 4 additional views')
     preview = image.convert('RGB')
+    if extra:
+        preview = prepare_multiview_analysis(preview, extra, 1280)
+        prompt += ('\nThese panels show ONE product. Main may be a cropped detail or label. '
+                   'Use the most complete view to identify the whole item; never classify '
+                   'a seam, shoulder, printed image or care label as the product. '
+                   'Describe only details supported by these photographs.')
     preview.thumbnail((1280, 1280))
     key = hashlib.sha256(CLASSIFICATION_MODEL.encode() + prompt.encode() +
                          str(preview.size).encode() + preview.tobytes()).hexdigest()

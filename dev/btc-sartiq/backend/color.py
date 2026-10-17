@@ -19,6 +19,87 @@ def to_srgb(rgb):
     return np.where(rgb <= .0031308, 12.92 * rgb, 1.055 * rgb ** (1 / 2.4) - .055)
 
 
+def preserve_dark_tones(source: Image.Image, generated: Image.Image, generated_mask: Image.Image | None):
+    """Bound unwanted lifting of a consistently dark, nearly neutral product.
+
+    No illuminant is guessed from the room and no color is forced to gray. The
+    original's central material must agree across six of nine tiles, the generated
+    foreground must also be predominantly dark/low-chroma, and hue estimates must
+    agree. Only a common linear-RGB exposure factor is applied, fading out on bright
+    details and matte edges. This is an uncalibrated guard, not true-color recovery.
+    """
+    report = {'method':'dark_material_exposure_guard', 'applied':False, 'calibrated':False,
+              'gain_linear_rgb':1., 'reason':'', 'reference':'central_source_consensus'}
+    def unchanged(reason):
+        return generated, {**report, 'reason':reason}
+    if generated_mask is None:
+        return unchanged('no_generated_mask')
+    original = source.convert('RGB').copy()
+    original.thumbnail((512,512), Image.Resampling.LANCZOS)
+    rgb = np.asarray(original, dtype=np.float32) / 255
+    # A close-up is valid; otherwise this region avoids walls, hangers and hands.
+    h,w = rgb.shape[:2]
+    roi = rgb[int(h*.30):max(int(h*.80),int(h*.30)+1),
+              int(w*.30):max(int(w*.70),int(w*.30)+1)]
+    if min(roi.shape[:2]) < 9:
+        return unchanged('insufficient_source_support')
+    lab = cv2.cvtColor(roi, cv2.COLOR_RGB2LAB)
+    candidates = (lab[...,0] > 3) & (lab[...,0] < 22) & (np.linalg.norm(lab[...,1:],axis=2) < 12)
+    if candidates.mean() < .75:
+        return unchanged('source_is_not_consistently_dark_neutral')
+    tiles = []
+    for ys in np.array_split(np.arange(roi.shape[0]),3):
+        for xs in np.array_split(np.arange(roi.shape[1]),3):
+            chosen = candidates[np.ix_(ys,xs)]
+            if chosen.mean() >= .70:
+                tiles.append(np.median(lab[np.ix_(ys,xs)][chosen],axis=0))
+    if len(tiles) < 6:
+        return unchanged('insufficient_spatial_agreement')
+    source_lab = np.median(np.asarray(tiles),axis=0)
+    if np.percentile(np.abs(np.asarray(tiles)[:,0]-source_lab[0]),90) > 4:
+        return unchanged('inconsistent_source_exposure')
+    preview = generated.convert('RGB').copy()
+    preview.thumbnail((512,512),Image.Resampling.LANCZOS)
+    sample = np.asarray(preview,dtype=np.float32) / 255
+    alpha = np.asarray(generated_mask.convert('L').resize(preview.size,Image.Resampling.NEAREST))
+    core = cv2.erode((alpha > 240).astype(np.uint8),np.ones((3,3),np.uint8)) > 0
+    if np.count_nonzero(core) < 64:
+        return unchanged('insufficient_generated_support')
+    output_lab = cv2.cvtColor(sample,cv2.COLOR_RGB2LAB)
+    dark = (output_lab[...,0] < 30) & (np.linalg.norm(output_lab[...,1:],axis=2) < 14)
+    if dark[core].mean() < .80:
+        return unchanged('generated_palette_is_not_dark_neutral')
+    generated_lab = np.median(output_lab[core & dark],axis=0)
+    report.update(source_lightness=round(float(source_lab[0]),3),
+                  generated_lightness=round(float(generated_lab[0]),3), reference_tiles=len(tiles))
+    if np.linalg.norm(source_lab[1:]-generated_lab[1:]) > 6:
+        return unchanged('source_and_generated_chroma_disagree')
+    if generated_lab[0]-source_lab[0] < 1.5:
+        return unchanged('no_significant_dark_tone_lift')
+    # Limit the adjustment to four L* units; retain the generated lighting and
+    # texture rather than histogram-matching the source shadows and wrinkles.
+    target_l = max(float(source_lab[0]),float(generated_lab[0])-4)
+    def luminance(l):
+        return ((l+16)/116)**3 if l > 8 else l/903.3
+    gain = float(np.clip(luminance(target_l)/luminance(float(generated_lab[0])),.55,1.))
+    full = np.asarray(generated.convert('RGB'),dtype=np.float32) / 255
+    full_lab = cv2.cvtColor(full,cv2.COLOR_RGB2LAB)
+    full_l = full_lab[...,0]
+    # Smoothly preserve bright labels, prints and highlights exactly. Alpha zero
+    # preserves every background pixel, including the studio contact shadow.
+    fade = np.clip((45-full_l)/20,0,1)
+    fade = fade*fade*(3-2*fade)
+    chroma_fade = np.clip((18-np.linalg.norm(full_lab[...,1:],axis=2))/6,0,1)
+    fade *= chroma_fade*chroma_fade*(3-2*chroma_fade)
+    weight = np.asarray(generated_mask.convert('L').resize(generated.size,Image.Resampling.BILINEAR),
+                        dtype=np.float32)/255 * fade
+    factor = 1-weight*(1-gain)
+    corrected = to_srgb(to_linear(full)*factor[...,None])
+    result = Image.fromarray(np.uint8(np.rint(np.clip(corrected,0,1)*255)))
+    report.update(applied=True, reason='bounded_dark_tone_lift', gain_linear_rgb=round(gain,5))
+    return result, report
+
+
 def normalize_illumination(image: Image.Image, mask: Image.Image):
     strength = float(os.getenv('COLOR_CORRECTION_STRENGTH', '1.05'))
     if not np.isfinite(strength) or not .5 <= strength <= 1.5:

@@ -67,7 +67,7 @@ try {
       return stream;
     }});
   `;
-  for (const mode of ['desktop', 'narrow-desktop', 'mobile', 'mobile-denied']) {
+  for (const mode of ['desktop', 'narrow-desktop', 'mobile', 'mobile-denied', 'desktop-unverified']) {
     const mobile = mode.startsWith('mobile');
     const {targetId} = await send('Target.createTarget', {url: 'about:blank'});
     const {sessionId} = await send('Target.attachToTarget', {targetId, flatten: true});
@@ -82,7 +82,9 @@ try {
         const {requestId, request} = event.params;
         const isEvents = request.url.endsWith('/events');
         if (!isEvents) requests++;
-        const job = {job_id: 'mock', status: 'complete', result_url: resultImage,
+        const unverified = mode === 'desktop-unverified';
+        const job = {job_id: 'mock', status: unverified ? 'review_required' : 'complete', result_url: resultImage,
+          quality: {single_product:{status:unverified ? 'unverified' : 'passed'}},
           images: [{id:'final', label:'Final output', url:resultImage}],
           execution_trace: [{id:'restyle', label:'Creating photo', model:'Mock model',
             libraries:{}, python:'3', status:'complete', seconds:.1, details:{}}]};
@@ -95,7 +97,7 @@ try {
     await command('Page.setInterceptFileChooserDialog', {enabled:true});
     await command('Fetch.enable', {patterns:[{urlPattern:'*://*/api/*'}]});
     await command('Emulation.setDeviceMetricsOverride', {
-      width:mode === 'desktop' ? 1440 : 390, height:mode === 'desktop' ? 1100 : 844,
+      width:mode.startsWith('desktop') ? 1440 : 390, height:mode.startsWith('desktop') ? 1100 : 844,
       deviceScaleFactor:1, mobile,
     });
     if (mobile) {
@@ -157,7 +159,10 @@ try {
     await evaluate(`document.querySelector('[aria-label="Use photo 2 as main"]').click()`);
     await waitFor('document.querySelector(".filename").textContent==="detail.png"');
     await evaluate('document.querySelector(".primary").click()');
-    await waitFor('document.querySelector(".ready")?.textContent === "Ready"');
+    await waitFor(`document.querySelector(".ready")?.textContent === ${JSON.stringify(mode === 'desktop-unverified' ? 'Review' : 'Ready')}`);
+    if (mode === 'desktop-unverified') {
+      assert.ok(await evaluate('document.querySelector(".review-note")?.textContent.includes("Product count could not be verified")'));
+    }
     assert.equal(requests, 1);
     await evaluate('document.querySelector(".actions .secondary").click()');
     await waitFor('document.querySelector(".comparison-screen")?.open');

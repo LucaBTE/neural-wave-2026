@@ -4,7 +4,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 import numpy as np
 import pytest
 from PIL import Image
-from color import normalize_illumination, to_linear, to_srgb
+from color import normalize_illumination, to_linear, to_srgb, preserve_dark_tones
 from quality import compare_product
 
 
@@ -142,3 +142,74 @@ def test_invalid_correction_strength_rejected(monkeypatch, strength):
     source, mask = scene()
     with pytest.raises(ValueError, match='COLOR_CORRECTION_STRENGTH'):
         normalize_illumination(photo(source), mask)
+
+
+def dark_product(color):
+    image = Image.new('RGB',(200,240),(245,245,245))
+    image.paste(color,(40,30,160,220))
+    mask = Image.new('L',image.size)
+    mask.paste(255,(40,30,160,220))
+    return image,mask
+
+
+def test_dark_tone_guard_preserves_background_lettering_and_colored_print():
+    source,_ = dark_product((27,28,32))
+    generated,mask = dark_product((40,41,48))
+    generated.paste((245,245,245),(88,60,112,74))
+    generated.paste((150,10,10),(88,100,112,114))
+    before_source, before_generated = source.tobytes(), generated.tobytes()
+    result,report = preserve_dark_tones(source,generated,mask)
+    assert report['applied'] and not report['calibrated']
+    assert .55 <= report['gain_linear_rgb'] < 1
+    assert result.size == generated.size
+    assert result.getpixel((60,120))[0] < generated.getpixel((60,120))[0]
+    assert result.getpixel((100,65)) == generated.getpixel((100,65))
+    assert result.getpixel((100,105)) == generated.getpixel((100,105))
+    outside = np.asarray(mask) == 0
+    assert np.array_equal(np.asarray(result)[outside],np.asarray(generated)[outside])
+    assert source.tobytes() == before_source and generated.tobytes() == before_generated
+
+
+@pytest.mark.parametrize('color', [(220,200,170),(190,30,20),(30,90,170),(40,80,60),
+                                   (220,220,220),(35,25,10)])
+def test_dark_guard_does_not_repaint_cream_saturated_or_other_materials(color):
+    source,_ = dark_product(color)
+    generated,mask = dark_product(color)
+    result,report = preserve_dark_tones(source,generated,mask)
+    assert not report['applied']
+    assert result.tobytes() == generated.tobytes()
+
+
+def test_dark_guard_rejects_mixed_or_missing_evidence():
+    source,_ = dark_product((27,28,32))
+    generated,mask = dark_product((40,41,48))
+    source.paste('white',(0,0,100,240))
+    result,report = preserve_dark_tones(source,generated,mask)
+    assert not report['applied'] and result.tobytes() == generated.tobytes()
+    source,_ = dark_product((27,28,32))
+    result,report = preserve_dark_tones(source,generated,None)
+    assert not report['applied'] and report['reason'] == 'no_generated_mask'
+    assert result.tobytes() == generated.tobytes()
+
+
+def test_dark_guard_does_not_force_dark_blue_to_gray_or_lift_already_dark_output():
+    source,_ = dark_product((27,28,32))
+    generated,mask = dark_product((15,30,65))
+    result,report = preserve_dark_tones(source,generated,mask)
+    assert not report['applied'] and result.tobytes() == generated.tobytes()
+    generated,mask = dark_product((25,25,29))
+    result,report = preserve_dark_tones(source,generated,mask)
+    assert not report['applied'] and result.tobytes() == generated.tobytes()
+
+
+def test_dark_guard_retains_local_texture_contrast_and_linear_channel_ratios():
+    source,_ = dark_product((26,27,31))
+    generated,mask = dark_product((38,39,44))
+    generated.paste((42,43,48),(40,90,160,94))
+    result,report = preserve_dark_tones(source,generated,mask)
+    assert report['applied']
+    linear_before = to_linear(np.asarray(generated)/255.)
+    linear_after = to_linear(np.asarray(result)/255.)
+    gains = linear_after[120,60]/linear_before[120,60]
+    assert np.ptp(gains) < .05
+    assert result.getpixel((60,91))[0] > result.getpixel((60,120))[0]

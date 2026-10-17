@@ -7,8 +7,9 @@ type StepImage = {id: string; label: string; url: string};
 type TraceStep = {id: string; label: string; model: string | null; libraries: Record<string, string>; python: string;
   status: string; seconds: number | null; details: {cache_hit?: boolean; resolution?: string; model_invoked?: boolean; view_count?: number; input_image_count?: number}};
 type Job = {job_id: string; status: string; result_url?: string; error?: string; current_image?: StepImage; images?: StepImage[]; execution_trace?: TraceStep[];
-  classification?: {review_required?: boolean}};
-const phases = [
+  quality?: {single_product?: {status?: string}};
+  classification?: {review_required?: boolean}; stages?: {status:string; label:string}[]};
+const defaultPhases = [
   {status: 'classifying', label: 'Identifying product'},
   {status: 'locating', label: 'Locating product'},
   {status: 'preparing', label: 'Preparing'},
@@ -16,6 +17,7 @@ const phases = [
   {status: 'describing', label: 'Analyzing product'},
   {status: 'generating', label: 'Creating photo'},
   {status: 'pressing', label: 'Removing wrinkles'},
+  {status: 'checking_product', label: 'Checking product'},
   {status: 'finishing', label: 'Refining'},
   {status: 'checking_quality', label: 'Final check'},
 ];
@@ -45,6 +47,7 @@ export default function App() {
   const currentImage = job?.result_url ? {id: 'final', label: 'Final output', url: job.result_url} : job?.current_image;
   const canViewHistory = !!job && finished.includes(job.status) && !!job.images?.length;
   const currentStep = job?.execution_trace?.[job.execution_trace.length - 1];
+  const phases = job?.stages || defaultPhases;
 
   const phaseIndex = phases.findIndex(phase => phase.status === job?.status);
   const progressLabel = submitting ? 'Uploading' : job?.status === 'queued' ? 'Queued' : phases[phaseIndex]?.label || 'Processing';
@@ -145,7 +148,7 @@ export default function App() {
           </div>}
         </section>
         <section aria-label="Current image" aria-busy={busy} data-active={mobilePanel === 'result'}>
-          <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">Ready</span>}</div>
+          <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">{job.quality?.single_product?.status === 'unverified' ? 'Review' : 'Ready'}</span>}</div>
           <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing' : '')}>
             {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/>{busy && <span className="live-caption"><Loader2 className="spinner" size={13}/>{currentImage.label}</span>}</> :
               <div className="empty">{busy ? <><Loader2 className="spinner" size={28} strokeWidth={1.5}/><strong>Creating photo</strong></> : <><ImageIcon size={28} strokeWidth={1.3}/><span>Your studio photo</span></>}</div>}
@@ -184,7 +187,9 @@ export default function App() {
           </article>)}
         </div>
       </details>}
-      {job?.result_url && job.status === 'review_required' && <p className="review-note">{job.classification?.review_required
+      {job?.result_url && job.status === 'review_required' && <p className="review-note">{job.quality?.single_product?.status === 'unverified'
+        ? 'Product count could not be verified. Check for duplicated or overlapping items.'
+        : job.classification?.review_required
         ? 'Product identification is uncertain. Check that the result shows the intended item.'
         : job.status === 'review_required' ? 'Check colors, prints and details before publishing.' : 'Check details before publishing.'}</p>}
       {canViewHistory && showHistory && <section id="image-history" className="image-history" aria-label="Intermediate images">
