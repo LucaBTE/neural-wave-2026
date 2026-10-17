@@ -94,9 +94,19 @@ def normalize_illumination(image: Image.Image, mask: Image.Image):
         report.update(status='neutral', reason='no_significant_cast')
         return image.convert('RGB').copy(), report
     corrected = linear * gains
-    if float(np.any(corrected[region] > 1, axis=1).mean()) > .01:
-        return unchanged('correction_would_clip_garment_colors')
+    # A few bright trims or white motifs must not disable white balance for the
+    # entire product. Fit exposure uniformly, then compress only out-of-gamut
+    # highlights with one scale per pixel, preserving linear channel ratios.
+    # Never clip blue independently: that would leave warm whites yellow.
+    peak = np.max(corrected, axis=2)
+    exposure_scale = min(1., 1. / max(1., float(np.percentile(peak[region], 99.5))))
+    if exposure_scale < .8:
+        return unchanged('correction_requires_excessive_exposure_reduction')
+    corrected *= exposure_scale
+    corrected /= np.maximum(1., corrected.max(axis=2, keepdims=True))
     result = Image.fromarray(np.uint8(np.rint(np.clip(to_srgb(corrected), 0, 1) * 255)))
     report.update(status='estimated', applied=True, reason='consistent_background_references',
-                  gains_rgb=[round(float(x), 5) for x in gains])
+                  gains_rgb=[round(float(x), 5) for x in gains],
+                  exposure_scale=round(exposure_scale, 5),
+                  highlight_fraction=round(float((peak[region] > 1).mean()), 5))
     return result, report

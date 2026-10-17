@@ -1,14 +1,17 @@
 import {useEffect, useRef, useState} from 'react';
-import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon} from 'lucide-react';
+import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon, Plus, X} from 'lucide-react';
 
 type StepImage = {id: string; label: string; url: string};
 type TraceStep = {id: string; label: string; model: string | null; libraries: Record<string, string>; python: string;
-  status: string; seconds: number | null; details: {cache_hit?: boolean; resolution?: string; model_invoked?: boolean}};
-type Job = {job_id: string; status: string; result_url?: string; error?: string; current_image?: StepImage; images?: StepImage[]; execution_trace?: TraceStep[]};
+  status: string; seconds: number | null; details: {cache_hit?: boolean; resolution?: string; model_invoked?: boolean; view_count?: number; input_image_count?: number}};
+type Job = {job_id: string; status: string; result_url?: string; error?: string; current_image?: StepImage; images?: StepImage[]; execution_trace?: TraceStep[];
+  classification?: {review_required?: boolean}};
 const phases = [
+  {status: 'classifying', label: 'Identifying product'},
+  {status: 'locating', label: 'Locating product'},
   {status: 'preparing', label: 'Preparing'},
   {status: 'balancing_color', label: 'Balancing colors'},
-  {status: 'describing', label: 'Analyzing garment'},
+  {status: 'describing', label: 'Analyzing product'},
   {status: 'generating', label: 'Creating photo'},
   {status: 'pressing', label: 'Removing wrinkles'},
   {status: 'finishing', label: 'Refining'},
@@ -17,8 +20,10 @@ const phases = [
 const finished = ['complete', 'review_required', 'error'];
 
 export default function App() {
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
+  const file = files[0];
+  const preview = previews[0];
   const [job, setJob] = useState<Job | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -27,6 +32,7 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const appendSelection = useRef(false);
   const requestLock = useRef(false);
   const busy = submitting || !!(job && !finished.includes(job.status));
   const currentImage = job?.result_url ? {id: 'final', label: 'Final output', url: job.result_url} : job?.current_image;
@@ -45,11 +51,10 @@ export default function App() {
   }, [busy, startedAt]);
 
   useEffect(() => {
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    const urls = files.map(photo => URL.createObjectURL(photo));
+    setPreviews(urls);
+    return () => urls.forEach(url => URL.revokeObjectURL(url));
+  }, [files]);
 
   useEffect(() => {
     if (!job || finished.includes(job.status)) return;
@@ -68,19 +73,27 @@ export default function App() {
     return () => events.close();
   }, [job?.job_id]);
 
-  const select = (next?: File) => {
-    if (!next || busy) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(next.type) || next.size > 12_000_000) {
-      setError('Choose a JPG, PNG or WebP photo up to 12 MB.'); return;
+  const select = (selection: File[], append = false) => {
+    if (!selection.length || busy) return;
+    const next = append ? [...files, ...selection] : selection;
+    if (next.length > 5) {setError('Choose up to 5 photos of the same product.'); return;}
+    if (next.some(photo => !['image/jpeg', 'image/png', 'image/webp'].includes(photo.type) || photo.size > 12_000_000)) {
+      setError('Choose JPG, PNG or WebP photos up to 12 MB each.'); return;
     }
-    setFile(next); setJob(null); setError(''); setShowHistory(false);
+    if (next.reduce((total, photo) => total + photo.size, 0) > 48_000_000) {
+      setError('Maximum total upload size: 48 MB.'); return;
+    }
+    setFiles(next); setJob(null); setError(''); setShowHistory(false);
   };
+  const pickPhotos = (append = false) => {appendSelection.current = append; input.current?.click();};
+  const updatePhotos = (next: File[]) => {setFiles(next); setJob(null); setError(''); setShowHistory(false);};
   const generate = async () => {
     if (!file || busy || requestLock.current) return;
     requestLock.current = true;
     setSubmitting(true); setJob(null); setError(''); setStartedAt(Date.now()); setElapsed(0); setShowHistory(false);
     try {
       const body = new FormData(); body.append('file', file);
+      files.slice(1).forEach(photo => body.append('additional_files', photo));
       const response = await fetch('/api/studio', {method: 'POST', body});
       const data = await response.json();
       if (!response.ok) throw Error(data.detail || 'Unable to start generation');
@@ -93,16 +106,27 @@ export default function App() {
     <header><span className="brand">sartiq<span className="brand-dot">.</span></span><span className="header-label">Studio</span></header>
     <main>
       <h1>Catalogue photography.</h1>
-      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={e => {select(e.target.files?.[0]); e.target.value = '';}}/>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy} onChange={e => {select(Array.from(e.target.files || []), appendSelection.current); e.target.value = '';}}/>
       <div className="comparison">
         <section aria-label="Original photo">
-          <div className="caption"><span>Original</span>{file && <span className="filename" title={file.name}>{file.name}</span>}</div>
-          <button className={'photo upload ' + (dragging ? 'dragging' : '')} disabled={busy} aria-label={preview ? 'Change photo' : 'Upload a photo'}
-            onClick={() => input.current?.click()} onDragOver={e => {e.preventDefault(); if (!busy) setDragging(true);}}
-            onDragLeave={() => setDragging(false)} onDrop={e => {e.preventDefault(); setDragging(false); select(e.dataTransfer.files[0]);}}>
-            {preview ? <><img src={preview} alt="Original garment"/><span className="change">Change photo</span></> :
-              <div className="empty"><Upload size={24} strokeWidth={1.5}/><strong>Upload a photo</strong><span>or drop it here</span><small>JPG, PNG, WebP · max 12 MB</small></div>}
+          <div className="caption"><span>{files.length > 1 ? 'Main photo' : 'Original'}</span>{file && <span className="filename" title={file.name}>{file.name}</span>}</div>
+          <button className={'photo upload ' + (dragging ? 'dragging' : '')} disabled={busy} aria-label={preview ? 'Change photos' : 'Upload photos'}
+            onClick={() => pickPhotos()} onDragOver={e => {e.preventDefault(); if (!busy) setDragging(true);}}
+            onDragLeave={() => setDragging(false)} onDrop={e => {e.preventDefault(); setDragging(false); select(Array.from(e.dataTransfer.files), files.length > 0);}}>
+            {preview ? <><img src={preview} alt="Main product reference"/><span className="change">Change photos</span></> :
+              <div className="empty"><Upload size={24} strokeWidth={1.5}/><strong>Upload photos</strong><span>or drop them here</span><small>Up to 5 · same product · 12 MB each</small></div>}
           </button>
+          {files.length > 0 && <div className="input-views" aria-label="Product reference photos">
+            <div className="view-thumbnails">{files.map((photo, index) => <div className={'view-thumbnail ' + (index === 0 ? 'selected' : '')} key={previews[index] || index}>
+              <button className="view-select" disabled={busy} aria-label={index === 0 ? 'Main photo' : `Use photo ${index + 1} as main`} aria-pressed={index === 0}
+                onClick={() => updatePhotos([photo, ...files.filter((_, position) => position !== index)])}>
+                <img src={previews[index]} alt={photo.name}/><span>{index === 0 ? 'Main' : index + 1}</span>
+              </button>
+              <button className="view-remove" disabled={busy} aria-label={`Remove photo ${index + 1}`} onClick={() => updatePhotos(files.filter((_, position) => position !== index))}><X size={12}/></button>
+            </div>)}
+            {files.length < 5 && <button className="add-view" disabled={busy} onClick={() => pickPhotos(true)} aria-label="Add photos"><Plus size={20}/><span>Add</span></button>}</div>
+            <p className="views-hint">Main photo sets the view. Add details or other angles.</p>
+          </div>}
         </section>
         <section aria-label="Current image" aria-busy={busy}>
           <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">Ready</span>}</div>
@@ -128,8 +152,10 @@ export default function App() {
               {step.status.replace(/_/g, ' ')}{step.seconds !== null && ` · ${step.seconds.toFixed(2)}s`}
             </span></div>
             <div className="execution-model">{step.model || 'Local processing'}{step.details.resolution && ` · ${step.details.resolution}`}</div>
+            {step.details.view_count && step.details.view_count > 1 && <small>{step.details.view_count} product views</small>}
+            {step.details.input_image_count && step.details.input_image_count > 2 && <small>{step.details.input_image_count} reference images</small>}
             <p>{Object.entries(step.libraries).map(([name, version]) => `${name} ${version}`).join(' · ')} · Python {step.python}</p>
-            {step.details.cache_hit && <small>Cached description · no model request</small>}
+            {step.details.cache_hit && <small>Cached result · no model request</small>}
           </article>)}
         </div>
       </details>}
@@ -140,7 +166,9 @@ export default function App() {
           {showHistory ? 'Hide steps' : job?.status === 'error' ? 'View available steps' : 'View all steps'}<ChevronDown size={16} className={showHistory ? 'expanded' : ''}/>
         </button>}
       </div>
-      {job?.result_url && <p className="review-note">{job.status === 'review_required' ? 'Check colors, prints and details before publishing.' : 'Check details before publishing.'}</p>}
+      {job?.result_url && <p className="review-note">{job.classification?.review_required
+        ? 'Product identification is uncertain. Check that the result shows the intended item.'
+        : job.status === 'review_required' ? 'Check colors, prints and details before publishing.' : 'Check details before publishing.'}</p>}
       {canViewHistory && showHistory && <section id="image-history" className="image-history" aria-label="Intermediate images">
         {job?.images?.map((image, index) => <figure key={image.id}>
           <a className={'history-image ' + (image.id === 'cutout' ? 'transparent' : '')} href={image.url} target="_blank" rel="noreferrer" aria-label={'Open ' + image.label}>
