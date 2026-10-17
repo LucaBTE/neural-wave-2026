@@ -1,7 +1,8 @@
 import {useEffect, useRef, useState} from 'react';
-import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon, Plus, X, Columns2} from 'lucide-react';
+import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon, Plus, X, Columns2, Shirt} from 'lucide-react';
 import {CameraCapture, isMobileCameraDevice} from './components/CameraCapture';
 import {ComparisonView} from './components/ComparisonView';
+import {EditorialReveal} from './components/EditorialReveal';
 
 type StepImage = {id: string; label: string; url: string};
 type TraceStep = {id: string; label: string; model: string | null; libraries: Record<string, string>; python: string;
@@ -48,6 +49,7 @@ export default function App() {
 
   const phaseIndex = phases.findIndex(phase => phase.status === job?.status);
   const progressLabel = submitting ? 'Uploading' : job?.status === 'queued' ? 'Queued' : phases[phaseIndex]?.label || 'Processing';
+  const progressPercent = submitting ? 4 : phaseIndex < 0 ? 8 : Math.min(97, Math.round(((phaseIndex + 1) / phases.length) * 100));
 
   useEffect(() => {
     if (!busy || startedAt === null) return;
@@ -112,10 +114,11 @@ export default function App() {
     finally {setSubmitting(false); requestLock.current = false;}
   };
 
-  return <div className="app">
+  return <div className={'app ' + (job?.result_url ? 'has-result' : '')}>
     <header className="site-header"><span className="brand">sartiq<span className="brand-dot">.</span></span><span className="header-label">Studio</span></header>
     <main className="studio">
       <div className="studio-heading"><h1>Catalogue studio.</h1>{files.length > 0 && <span className="photo-count">{files.length} / 5 photos</span>}</div>
+      {!files.length && <section className="editorial-showcase"><div className="editorial-showcase__copy"><p>From everyday to editorial</p><h2>One garment.<br />A clearer story.</h2><span>See how sartiq turns an honest photograph into a finished product image.</span></div><EditorialReveal /></section>}
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy} onChange={e => {select(Array.from(e.target.files || []), appendSelection.current); e.target.value = '';}}/>
       {mobile && <input ref={nativeCameraInput} type="file" accept="image/*" capture="environment" hidden disabled={busy}
         onChange={event => {select(Array.from(event.target.files || []), appendSelection.current); event.target.value = ''; setCameraOpen(false);}}/>}
@@ -146,17 +149,16 @@ export default function App() {
         </section>
         <section aria-label="Current image" aria-busy={busy} data-active={mobilePanel === 'result'}>
           <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">Ready</span>}</div>
-          <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing' : '')}>
-            {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/>{busy && <span className="live-caption"><Loader2 className="spinner" size={13}/>{currentImage.label}</span>}</> :
-              <div className="empty">{busy ? <><Loader2 className="spinner" size={28} strokeWidth={1.5}/><strong>Creating photo</strong></> : <><ImageIcon size={28} strokeWidth={1.3}/><span>Your studio photo</span></>}</div>}
+          <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing ' : '') + (job?.result_url ? 'finished' : '')}>
+            {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/>{busy && <><span className="texture-overlay" aria-hidden="true"><i/><i/><i/><b/><Shirt size={30}/></span><span className="live-caption"><Shirt className="garment-spinner" size={14}/>{currentImage.label}</span></>}</> :
+              <div className="empty">{busy ? <><span className="garment-loader"><Shirt size={30} strokeWidth={1.4}/></span><strong>Creating photo</strong></> : <><ImageIcon size={28} strokeWidth={1.3}/><span>Your studio photo</span></>}</div>}
           </div>
         </section>
       </div>
       {busy && <div className="progress-panel">
-        <div className="progress-heading"><span role="status">{progressLabel}<span className="phase-count">{phaseIndex >= 0 ? ` · ${phaseIndex + 1}/${phases.length}` : ''}</span></span>
-          <span className="elapsed" aria-label="Elapsed time">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span></div>
-        <div className="progress-track" role="progressbar" aria-label="Completed stages" aria-valuemin={0} aria-valuemax={phases.length} aria-valuenow={Math.max(0, phaseIndex)} aria-valuetext={progressLabel}>
-          {phases.map((phase, i) => <span key={phase.status} className={i < phaseIndex ? 'done' : i === phaseIndex ? 'current' : ''}/>)}</div>
+        <div className="progress-heading"><span role="status">{progressLabel}</span><span className="progress-percent">{progressPercent}%</span></div>
+        <div className="progress-track" role="progressbar" aria-label="Image creation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent} aria-valuetext={`${progressPercent}% complete`}><i style={{width: `${progressPercent}%`}} /></div>
+        <div className="progress-footer"><span><Shirt className="garment-spinner" size={14}/> Shaping your product image</span><span className="elapsed" aria-label="Elapsed time">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span></div>
       </div>}
       {error && <p className="error" role="alert">{error}</p>}
       <div className="actions">
