@@ -8,16 +8,16 @@ provides the silhouette. All photos supply construction and artwork details.
 
 | Step | Purpose | Model / libraries |
 |---|---|---|
-| Image preparation | Apply EXIF orientation, convert to RGB, limit the longest edge to 2048 px. | Python + Pillow; local |
+| Image preparation | Apply EXIF orientation, transform embedded ICC profiles to sRGB, limit the longest edge to 2048 px. | Python + Pillow/LittleCMS; local |
 | Identify and describe | Select the foreground product from all supplied views in one request and describe its visible construction. Return a physical category, not a brand or printed title. | `fal-ai/moondream3-preview/query`, reasoning disabled; local multi-view board |
 | Locate | Get native bounding boxes for the classified category and select the central candidate. | `fal-ai/moondream3-preview/detect` |
-| Validate segmentation | Segment the whole selected product; reject unrelated objects and small printed fragments. Keep the mask for previews and diagnostic comparison. | `fal-ai/sam-3/image` + NumPy/OpenCV |
+| Validate segmentation | Segment the whole selected product; reject unrelated objects and small printed fragments. Keep the mask for previews, source material color samples and diagnostics. | `fal-ai/sam-3/image` + NumPy/OpenCV |
 | Prepare references | Send the full main scene and each additional photograph once. Do not add a second crop of the same product. Preserve lighting context. | Pillow; local, cached uploads and URL deduplication |
 | Create catalogue photograph | One 2K edit: faithful colors and artwork, front-facing flat lay, sleeves outward, complete straps/belts, steamed fabric, near-white surface and subtle contact shadow. | `google/nano-banana-2.1/edit` — Nano Banana, also used by the official baseline |
 | Check for duplicate products | Inspect the generated photograph for overlapping/ghosted copies, including a plain shirt behind a printed one. One short query on a preview up to 768 px. | `fal-ai/moondream3-preview/query`, reasoning disabled, timeout at most 30 s |
 | Correct and recheck, only if duplication is detected | Edit only the generated candidate to retain one product; recheck it independently. One repair maximum. A replacement not confirmed SINGLE is rejected before final delivery. | Same configured Nano Banana endpoint, then Moondream Query |
-| Diagnostic matte and delivery | Estimate foreground alpha for quality checks. Resize/pad the complete generated RGB frame to 1200 × 1800; do not cut out or recolor the delivered garment. | `fal-ai/birefnet/v2` + Pillow |
-| Color fidelity and final diagnostics | Bound excessive lifting of reliably dark, low-chroma materials, then compare color/background. Record warnings, timings and the correction decision. | NumPy + OpenCV; local, no new inference |
+| Matte and delivery framing | Estimate foreground alpha for local color refinement and quality checks. Resize/pad the complete generated RGB frame to 1200 × 1800; alpha never cuts out delivered details. | `fal-ai/birefnet/v2` + Pillow |
+| Color fidelity and final diagnostics | Remove supported studio backdrop casts, bound foreground exposure/chroma drift against the source, protect highlights and use a conservative dark-material fallback when source masks are unavailable. Record each decision. | NumPy + OpenCV; local, no new inference |
 
 **Six inference requests cold; three when preparatory work is cached.** Classification
 and description share one request. There is no separate analysis timeout and no
@@ -86,19 +86,18 @@ scene remains visible to the image generator, without a duplicate crop. SAM stil
 validates selection, but **the generator does not receive an inpainting mask**.
 Its input is no longer restricted to whitened product pixels.
 
-Color correction now happens during scene-aware generative relighting. Removing
-an uncalibrated global correction avoids multiplying every material by gains inferred
-from possibly beige surfaces. This does not recover physically exact colors without
-a calibrated reference; cream fabric must remain cream. The generator's output,
-including pale straps and contact shadows, is preserved through delivery; BiRefNet
-alpha cannot erase it. Its matte may still be imperfect for diagnostics. The final
-color-only guard may adjust excessively lifted dark tones; it never changes shape
-or composites a new garment. See [color-correction.md](color-correction.md).
+Scene-aware generative relighting retains the original room context. The original
+room is not automatically treated as a white reference. Final local color refinement
+uses the requested neutral generated studio backdrop and reliable foreground source
+samples; it does not assume that cream fabric must become white. BiRefNet alpha
+controls color blending and diagnostics, never removal of pale straps or other RGB
+details. Color refinement never changes shape or composites another garment.
 
-These changes are motivated by observed failures. **New live scores have not yet
-been measured.** Local tests verify the handoff and pixel preservation, not whether
-the new pipeline beats the baseline. Targets are used only by the unchanged official
-scorer; neither pipeline receives them.
+The unchanged official scorer measured improvements in local replays of two saved
+five-garment runs. Original mattes were unavailable, so these replays reconstruct
+masks locally; they are not fresh end-to-end generation results or an independent
+validation set. Targets are read only by the evaluator. See
+[color-correction.md](color-correction.md) for measurements and limitations.
 
 ## Editable prompts
 

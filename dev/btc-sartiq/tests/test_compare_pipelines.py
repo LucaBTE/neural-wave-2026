@@ -165,16 +165,22 @@ def test_studio_worker_passes_only_first_input_and_records_failures(tmp_path, mo
     selected = tmp_path/'selected.jsonl'
     selected.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     states = []
+    snapshots = []
     class Graph:
         def invoke(self, state):
             states.append(state)
             if len(states) == 2:
                 raise RuntimeError('Simulated failure')
+            snapshots[-1]('composed', 'Studio composition', Image.new('RGB', (20,30), 'gray'))
             return {'result':Image.new('RGB',(20,30),'white'),
+                'mask':Image.new('L', (10,10), 255), 'result_mask':Image.new('L', (20,30), 255),
                 **{key:{} for key in ('classification','target_selection','quality','metrics','analysis')},
                 'execution_trace':[], 'generation_prompt':'generation','pressing_prompt':'pressing',
                 'reference_policy':'source_photographs'}
-    monkeypatch.setattr(worker, 'build_pipeline', lambda *args:Graph())
+    def build(*args):
+        snapshots.append(args[1])
+        return Graph()
+    monkeypatch.setattr(worker, 'build_pipeline', build)
     monkeypatch.setattr(worker, 'load_dotenv', lambda *args:None)
     monkeypatch.setattr(worker, 'generation_settings', lambda:None)
     monkeypatch.setattr(worker, 'analysis_settings', lambda:None)
@@ -184,6 +190,9 @@ def test_studio_worker_passes_only_first_input_and_records_failures(tmp_path, mo
     assert all(state['additional_images']==[] for state in states)
     assert states[0]['image'].getpixel((0,0)) == (255,0,0)
     assert (tmp_path/'preds/studio/t0001/front.png').is_file()
+    assert Image.open(tmp_path/'diagnostics/t0001/front_before_color.png').getpixel((0,0)) == (128,128,128)
+    assert Image.open(tmp_path/'diagnostics/t0001/front_source_mask.png').size == (10,10)
+    assert Image.open(tmp_path/'diagnostics/t0001/front_result_mask.png').size == (20,30)
     report = json.loads((tmp_path/'diagnostics/t0001/front.json').read_text())
     assert report['generation_reference_policy'] == 'source_photographs'
     assert not (tmp_path/'preds/studio/t0002/front.png').exists()

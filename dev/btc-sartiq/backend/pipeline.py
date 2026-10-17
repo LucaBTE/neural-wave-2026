@@ -18,7 +18,7 @@ from fal_client.client import FalClientError
 from httpx import HTTPError
 from langgraph.graph import END, START, StateGraph
 from quality import compare_product
-from color import normalize_illumination, preserve_dark_tones
+from color import normalize_illumination, restore_color_fidelity, normalize_color_profile
 from generation_prompt import build_generation_prompt, build_pressing_prompt
 from garment_analysis import ANALYSIS_MODELS, DEFAULT_MODEL, analyze_garment, analysis_settings, prepare_analysis_image
 from execution_trace import begin_step, end_step
@@ -170,7 +170,7 @@ def generation_settings() -> tuple[str, str]:
 
 def normalize_photo(data: bytes) -> Image.Image:
     image = Image.open(io.BytesIO(data)); image.load()
-    image = ImageOps.exif_transpose(image).convert("RGB")
+    image = normalize_color_profile(ImageOps.exif_transpose(image))
     if max(image.size) > 2048:
         image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
     return image
@@ -574,7 +574,7 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
         snapshot("cutout", "Product matte (diagnostic)" if faithful else "Background removed", cutout)
         if faithful or state.get('direct_reference'):
             # Preserve the model's RGB, shadows and framing. The matte is for
-            # diagnostics only; recompositing it can erase pale straps and prints.
+            # color blending/diagnostics; recompositing can erase pale straps and prints.
             result = ImageOps.pad(generated, (1200,1800), method=Image.Resampling.LANCZOS,
                                   color=(245,245,245))
             result_mask = ImageOps.pad(cutout.getchannel('A'), (1200,1800),
@@ -586,7 +586,8 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
 
     def verify(state):
         report("checking_quality")
-        result, color_fidelity = preserve_dark_tones(state['image'], state['result'], state.get('result_mask'))
+        result, color_fidelity = restore_color_fidelity(
+            state['color_reference'], state['result'], state.get('mask'), state.get('result_mask'))
         if color_fidelity['applied']:
             snapshot('color_fidelity', 'Color fidelity', result)
         try:

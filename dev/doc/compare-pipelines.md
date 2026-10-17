@@ -57,6 +57,11 @@ CLIP, geometry and SSIM. A new folder under `dev/comparisons/<timestamp>/` conta
 - `diagnostics/`: Studio prompts, classification, quality, models, timings and traces.
 - `diagnostics/<id>/front_generated.png`: generated RGB before local resize/padding,
   for checking whether a difference appeared during generation or final delivery.
+- `diagnostics/<id>/front_before_color.png`: exact delivery frame immediately
+  before local color refinement, including framing in the optional staged profile.
+- `diagnostics/<id>/front_source_mask.png` and `front_result_mask.png`: actual
+  source SAM and generated BiRefNet masks, when available, for reproducible local
+  color replays. Missing masks are not fabricated or replaced with a target mask.
 - `generation_status.json`: generation subprocess outcomes.
 
 No existing baseline/studio predictions or previous reports are overwritten.

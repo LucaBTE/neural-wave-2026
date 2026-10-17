@@ -59,9 +59,11 @@ permission failures release camera streams.
 6. **BiRefNet v2** supplies a diagnostic matte. Delivery preserves the generated
    RGB frame and shadows, resized/padded to 1200 × 1800; the matte cannot remove
    pale straps or other generated details.
-7. **OpenCV/NumPy** bound excessive lifting of consistently dark, nearly neutral
-   materials, protecting bright/colored details and background, then record
-   color/background diagnostics. These are distinct from
+7. **OpenCV/NumPy** remove supported residual casts from the generated neutral
+   studio, then bound material exposure/chroma drift using reliable source foreground
+   samples. Bright details are protected; missing source masks retain a conservative
+   dark-material fallback. Decisions are recorded with color/background diagnostics,
+   distinct from
    the official competition score and do not certify text, identity or wrinkle removal.
 
 Six model requests cold, three when preprocessing is cached. A positive duplicate
@@ -110,8 +112,10 @@ Generation templates preserve `{{LIGHTING_INSTRUCTIONS}}` and
 are recorded in job metadata. Captions remain short, auxiliary evidence.
 Model-inferred color adjectives are removed from the generation caption and target
 labels; quoted artwork text is retained. Classification and detection themselves
-are unchanged. Photographs establish colors. The final dark-tone guard and its
-decision are recorded in `quality.color_fidelity`. See [color-correction.md](../doc/color-correction.md).
+are unchanged. Photographs establish colors. Embedded input ICC profiles are
+transformed to sRGB before upload and numeric color processing. Final studio and
+material color decisions are recorded in `quality.color_fidelity`. See
+[color-correction.md](../doc/color-correction.md).
 
 Defaults:
 

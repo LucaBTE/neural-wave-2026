@@ -33,12 +33,21 @@ def main(argv=None):
         try:
             source = Path(row['inputs'][0])
             print(f'\n{identity}: Studio starting', flush=True)
-            state = build_pipeline(lambda **event:print(identity, event['status'], flush=True)).invoke(
+            def save_color_input(key, label, image):
+                if key == 'composed':
+                    image.save(folder / (view + '_before_color.png'), format='PNG')
+            state = build_pipeline(lambda **event:print(identity, event['status'], flush=True),
+                                   save_color_input).invoke(
                 {'image':normalize_photo(source.read_bytes()), 'additional_images':[]})
             destination.parent.mkdir(parents=True, exist_ok=True)
             state['result'].save(destination, format='PNG')
             if 'generated_image' in state:
                 state['generated_image'].save(folder / (view + '_generated.png'), format='PNG')
+            # Save real production mattes for exact local color replays; never
+            # reconstruct a target mask or send scoring references to the model.
+            for name, key in [('source_mask', 'mask'), ('result_mask', 'result_mask')]:
+                if state.get(key) is not None:
+                    state[key].save(folder / (view + '_' + name + '.png'), format='PNG')
             diagnostics = {key:state[key] for key in ('classification','target_selection','quality',
                 'metrics','execution_trace','analysis','generation_prompt','pressing_prompt')}
             diagnostics['generation_reference_policy'] = state['reference_policy']
