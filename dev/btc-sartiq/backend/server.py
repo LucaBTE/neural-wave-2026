@@ -59,25 +59,28 @@ def record_image(job_id: str, key: str, label: str, image: Image.Image | str):
         changes.notify_all()
 
 
-def studio_task(job_id: str, data: bytes):
+def studio_task(job_id: str, data: bytes, additional_data: list[bytes] | None = None):
     started = perf_counter()
     preparation = begin_step('prepare_image', 'Image preparation', None, {'Pillow': 'pillow'}, job_id)
     prepared = False
     try:
         update(job_id, status='preparing', execution_trace=[preparation])
         image = normalize_photo(data)
+        additional_images = [normalize_photo(item) for item in (additional_data or [])]
         preparation = end_step(preparation, perf_counter() - started)
         prepared = True
         update(job_id, execution_trace=[preparation])
         state = build_pipeline(lambda **fields: update(job_id, **fields),
                                lambda key, label, image: record_image(job_id, key, label, image),
                                run_id=job_id).invoke(
-            {"image": image, "garment": "clothing", 'execution_trace': [preparation]})
+            {"image": image, 'additional_images': additional_images,
+             'execution_trace': [preparation]})
         update(job_id, status='complete' if state['quality']['passed'] else 'review_required',
                result_url=state['result_url'], quality=state['quality'],
                garment_description=state['garment_description'],
                generation_prompt=state['generation_prompt'], metrics=state['metrics'], analysis=state['analysis'],
                pressing_prompt=state['pressing_prompt'],
+               classification=state['classification'],
                execution_trace=state['execution_trace'], target_selection=state['target_selection'])
     except Exception as exc:
         if not prepared:
@@ -91,25 +94,38 @@ def config():
     model, resolution = generation_settings()
     analysis = analysis_settings()
     return {'models': {**MODELS, 'restyling': model, 'pressing': model, 'description': analysis['model']}, 'generation_resolution': resolution,
-            'inference_requests_per_run': 5, 'analysis': analysis,
+            'inference_requests_per_run': 7,
+            'inference_requests_cached_run': 3,
+            'reference_cache_seconds': 600,
+            'inference_requests_by_kind': {'garment': 7, 'accessory': 6, 'other': 6},
+            'inference_requests_cached_by_kind': {'garment': 3, 'accessory': 2, 'other': 2}, 'analysis': analysis,
+            'inputs': {'max_photos': 5, 'max_file_bytes': 12_000_000, 'max_total_bytes': 48_000_000},
             'output': {'width': 1200, 'height': 1800, 'background': 'white'}}
 
 
 @app.post('/api/studio', status_code=202)
-async def studio(file: UploadFile = File(...)):
-    if file.content_type not in ('image/png', 'image/jpeg', 'image/webp'):
-        raise HTTPException(400, 'Upload a PNG, JPG or WebP photo')
-    data = await file.read(12_000_001)
-    if len(data) > 12_000_000:
-        raise HTTPException(413, 'Maximum file size: 12 MB')
-    try:
-        normalize_photo(data)
-    except Exception:
-        raise HTTPException(400, 'Invalid image')
+async def studio(file: UploadFile = File(...), additional_files: list[UploadFile] = File(default=[])):
+    photos = [file, *additional_files]
+    if len(photos) > 5:
+        raise HTTPException(400, 'Maximum 5 photos of the same product')
+    payloads = []
+    total = 0
+    for photo in photos:
+        if photo.content_type not in ('image/png', 'image/jpeg', 'image/webp'):
+            raise HTTPException(400, 'Upload PNG, JPG or WebP photos')
+        data = await photo.read(12_000_001)
+        total += len(data)
+        if len(data) > 12_000_000 or total > 48_000_000:
+            raise HTTPException(413, 'Maximum 12 MB per photo and 48 MB in total')
+        try:
+            normalize_photo(data)
+        except Exception:
+            raise HTTPException(400, 'Invalid image')
+        payloads.append(data)
     job_id = uuid.uuid4().hex
     with lock:
-        jobs[job_id] = {'status': 'queued', 'error': None, 'result_url': None}
-    pool.submit(studio_task, job_id, data)
+        jobs[job_id] = {'status': 'queued', 'error': None, 'result_url': None, 'input_count': len(photos)}
+    pool.submit(studio_task, job_id, payloads[0], payloads[1:])
     return {'job_id': job_id}
 
 

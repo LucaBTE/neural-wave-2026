@@ -7,16 +7,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 import generation_prompt
 
 
-def test_pressing_template_is_reloaded_and_empty_template_rejected(tmp_path, monkeypatch):
+def test_pressing_template_is_reloaded_and_empty_instructions_rejected(tmp_path, monkeypatch):
     template = tmp_path / 'pressing.txt'
     monkeypatch.setattr(generation_prompt, 'PRESSING_TEMPLATE_PATH', template)
-    template.write_text('First pressing instructions')
-    assert generation_prompt.build_pressing_prompt() == 'First pressing instructions'
-    template.write_text('Updated pressing instructions')
-    assert generation_prompt.build_pressing_prompt() == 'Updated pressing instructions'
-    template.write_text(' \n')
+    template.write_text('Press the garment.')
+    assert generation_prompt.build_pressing_prompt() == 'Press the garment.'
+    template.write_text('Updated instructions.')
+    assert generation_prompt.build_pressing_prompt() == 'Updated instructions.'
+    template.write_text(' ')
     with pytest.raises(ValueError, match='must not be empty'):
         generation_prompt.build_pressing_prompt()
+
 
 
 def test_template_changes_are_loaded_for_each_job(tmp_path, monkeypatch):

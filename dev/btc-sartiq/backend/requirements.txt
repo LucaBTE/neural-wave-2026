@@ -1,7 +1,7 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
-fal-client>=0.5
+fal-client>=1.0.3,<2
 pillow>=10
 python-dotenv>=1
 httpx>=0.27
