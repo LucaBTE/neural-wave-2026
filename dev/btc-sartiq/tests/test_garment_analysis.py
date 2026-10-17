@@ -111,7 +111,8 @@ def test_sdk_timeout_is_shorter_only_for_analysis(monkeypatch):
     monkeypatch.setattr(pipeline.fal_client, 'subscribe', lambda *args, **kwargs: calls.append(kwargs) or {})
     pipeline.call(analysis.DEFAULT_MODEL, {})
     pipeline.call(pipeline.RESTYLE_MODEL, {})
-    assert [call['client_timeout'] for call in calls] == [90, 300]
+    pipeline.call(pipeline.LOCALIZATION_MODEL, {})
+    assert [call['client_timeout'] for call in calls] == [90, 300, 90]
 
 
 @pytest.mark.parametrize('key,value', [('FAL_ANALYSIS_TIMEOUT','0'), ('FAL_ANALYSIS_MAX_SIDE','10'),

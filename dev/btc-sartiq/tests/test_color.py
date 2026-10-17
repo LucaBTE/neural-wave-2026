@@ -103,6 +103,25 @@ def test_saturated_background_is_not_used_as_light_reference():
     assert result.tobytes() == photo(source).tobytes()
 
 
+def test_bright_garment_does_not_disable_scene_white_balance(monkeypatch):
+    monkeypatch.setenv('COLOR_CORRECTION_STRENGTH', '1.10')
+    source, mask = scene()
+    foreground = np.asarray(mask) > 127
+    source[foreground] = [.6, .8, 1.]
+    tinted = photo(to_srgb(to_linear(source) * [1.25, 1., .7]))
+    before = tinted.tobytes()
+    corrected, report = normalize_illumination(tinted, mask)
+    assert report['applied']
+    assert report['highlight_fraction'] > .01
+    assert .8 <= report['exposure_scale'] < 1.
+    def chroma(image):
+        pixels = to_linear(np.asarray(image) / 255.)[foreground]
+        return pixels / pixels.sum(axis=1, keepdims=True)
+    error_before = np.abs(chroma(tinted) - chroma(photo(source))).mean()
+    assert np.abs(chroma(corrected) - chroma(photo(source))).mean() < error_before * .2
+    assert tinted.tobytes() == before
+
+
 def test_correction_strength_is_adjustable_without_changing_input(monkeypatch):
     source, mask = scene()
     tinted = photo(to_srgb(to_linear(source) * [1.25, 1., .7]))

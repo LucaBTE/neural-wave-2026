@@ -1,14 +1,4 @@
-:root {
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #ecefe9;
-  background: #101210;
-  color-scheme: dark;
-  font-synthesis: none;
-  -webkit-font-smoothing: antialiased;
-  --accent: #c3d8a4;
-  --muted: #969f91;
-  --border: #30362e;
-}
+:root { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #182019; background: #f4f5f1; font-synthesis: none; -webkit-font-smoothing: antialiased; --ink: #182019; --muted: #737a73; --line: #d9ddd5; --glass: rgba(255,255,255,.66); --lime: #d9ff71; --deep: #152118; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
 button, a { -webkit-tap-highlight-color: transparent; }
@@ -66,6 +56,17 @@ h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 500; letter-spacing: -1.3px
 .progress-panel { margin: 20px auto 0; padding: 20px 24px; background: linear-gradient(110deg, #232c1d, #1a2016); border: 1px solid #3c4931; border-radius: 14px; }
 .progress-heading { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #dbe7ce; margin-bottom: 14px; }
 .phase-count, .elapsed { color: #a3b094; font-size: 12px; font-variant-numeric: tabular-nums; }
+.input-views { margin-top: 12px; }
+.view-thumbnails { display: flex; gap: 8px; overflow-x: auto; padding: 3px 2px; }
+.view-thumbnail { position: relative; flex: 0 0 62px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.view-thumbnail.selected { border-color: var(--accent); }
+.view-select { display: block; width: 100%; height: 76px; border: 0; background: #11160f; padding: 0; position: relative; cursor: pointer; }
+.view-select img { width: 100%; height: 100%; object-fit: cover; }
+.view-select span { position: absolute; bottom: 3px; left: 3px; border-radius: 4px; padding: 2px 5px; font-size: 10px; color: #eef3e7; background: #111a11dc; }
+.view-remove { position: absolute; top: 2px; right: 2px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #111a11dc; cursor: pointer; }
+.add-view { flex: 0 0 58px; min-height: 76px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px dashed var(--border); border-radius: 8px; color: var(--accent); background: transparent; cursor: pointer; font-size: 11px; }
+.views-hint { margin: 9px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.view-select:focus-visible, .view-remove:focus-visible, .add-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .progress-track { display: flex; gap: 6px; }
 .progress-track span { flex: 1; height: 5px; border-radius: 4px; background: #39432f; }
 .progress-track .done { background: var(--accent); }
