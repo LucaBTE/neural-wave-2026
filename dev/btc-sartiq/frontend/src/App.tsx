@@ -57,21 +57,37 @@ export default function App() {
   }, [files]);
 
   useEffect(() => {
-    if (!job || finished.includes(job.status)) return;
-    const events = new EventSource('/api/jobs/' + job.job_id + '/events');
-    events.onmessage = (event) => {
+    let stream: MediaStream | undefined;
+    let disposed = false;
+    let cameraReady = false;
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cameraReady) setMessage('Camera is taking too long. You can choose a photo instead.');
+    }, 4000);
+    const openCamera = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) { setMessage('Camera is not available on this device.'); return; }
       try {
-        const data: Job = JSON.parse(event.data);
-        setJob(data);
-        setError(data.status === 'error' ? data.error || 'Processing failed' : '');
-        if (finished.includes(data.status)) events.close();
-      } catch {
-        setError('Unable to read progress updates.');
-      }
+        stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}}, audio: false});
+        if (disposed) { stream.getTracks().forEach(track => track.stop()); return; }
+        const source = video.current;
+        if (!source) return;
+        const markReady = () => {
+          if (!disposed && source.videoWidth > 0 && source.videoHeight > 0) {
+            cameraReady = true;
+            window.clearTimeout(fallbackTimer);
+            setReady(true);
+            setMessage('Keep the garment fully in frame');
+          }
+        };
+        source.srcObject = stream;
+        source.addEventListener('loadedmetadata', markReady, {once: true});
+        source.addEventListener('loadeddata', markReady, {once: true});
+        await source.play();
+        markReady();
+      } catch { setMessage('Camera access was not granted. You can still choose a photo.'); }
     };
-    events.onerror = () => setError('Connection lost. Reconnecting…');
-    return () => events.close();
-  }, [job?.job_id]);
+    void openCamera();
+    return () => { disposed = true; window.clearTimeout(fallbackTimer); stream?.getTracks().forEach(track => track.stop()); };
+  }, []);
 
   const select = (selection: File[], append = false) => {
     if (!selection.length || busy) return;
