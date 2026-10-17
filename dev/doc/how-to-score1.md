@@ -33,11 +33,11 @@ Run from `neural-wave-2026/`
 2. Run the pipeline on each val pair and copy the result into the scorer layout. Start small: `head -3` does 3 pairs
 
 ```bash
-for id in $(.venv/bin/python -c "import json;[print(json.loads(l)['pair_id']) for l in open('holdout/val.jsonl')]" | head -3); do
-    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py sartiq_neural_wave_2026/train/$id/input_1.jpg || {
+.venv/bin/python -c "import json;[print(r['pair_id'],*['sartiq_neural_wave_2026/'+p for p in r['inputs']]) for r in map(json.loads, open('holdout/val.jsonl'))]" | head -3 | while read id first rest; do
+    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py --views $first $rest || {
   echo "FAIL $id"; continue; }
     mkdir -p predictions/btc/$id
-    cp dev/btc-sartiq/validation/${id}_input_1_studio.png predictions/btc/$id/front.png
+    cp dev/btc-sartiq/validation/${id}_$(basename ${first%.*})_studio.png predictions/btc/$id/front.png
   done
 ```
 
