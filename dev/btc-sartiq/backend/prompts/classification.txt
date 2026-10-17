@@ -2,11 +2,25 @@ Identify ONE main product intended for a catalogue photograph in this full scene
 Choose the deliberately presented, foreground product near the image center,
 not the largest region or the object covering the exact center pixel.
 Do not assume the product is clothing. It can be glasses, jewelry, shoes, a bag,
-a garment or another object. Ignore clothing worn by people in the background,
-hands holding the product, furniture and supporting surfaces.
+a garment or another object. Distinguish the MAIN foreground person from incidental
+people in the background. Clothing worn by the main person IS a valid target.
+Ignore hands, furniture, badges, lanyards and supporting surfaces as incidental props.
+Follow this priority:
+1. If a distinct product is deliberately presented in the immediate foreground
+   (held out, on a table or displayed near the center), select that product.
+2. Otherwise, if a foreground person dominates the photo, select the main visible
+   garment on their central torso, such as their sweatshirt, hoodie, shirt or jacket.
+   Do not exclude it just because it is being worn. Do not choose trousers, an
+   incidental badge or clothing on another person instead of that main torso garment.
+3. Background racks, hangers, shop displays, posters and small distant garments
+   never outrank the foreground product or the main person's central garment.
+   Being unobstructed or hanging separately does not make a background garment the target.
 Example: sunglasses on a table in front of a person wearing a sweater mean the
 target is sunglasses, NOT the person's sweater. A sweater displayed by itself
 on a hanger or mannequin can instead be the target.
+Example: a close portrait of a seated person in a light blue sweatshirt, with a
+small yellow T-shirt hanging far back on the left, targets the LIGHT BLUE SWEATSHIRT
+being worn. The yellow shirt is background inventory, not the catalogue target.
 
 Return only one JSON object, with no prose or reasoning:
 {"label":"short English product name with distinguishing visual attributes",
@@ -16,7 +30,9 @@ Return only one JSON object, with no prose or reasoning:
 Replace the example values with actual observations. Do not generate bounding
 boxes, points or any coordinates: a dedicated detector will locate the product.
 Identify the COMPLETE physical product, never a decoration or a component of it.
-category must be a short English physical object noun, without brand names,
+category must be a short English physical object noun, optionally qualified by
+visible base color when needed to distinguish it from other garments in the scene
+(for example "light blue sweatshirt"). Never include brand names,
 printed words, people depicted in graphics, slogans or artwork descriptions.
 For a T-shirt with a portrait and the words "Jennie Ruby", return category="T-shirt",
 kind="garment", label="white graphic T-shirt". Never select "Jennie Ruby", the

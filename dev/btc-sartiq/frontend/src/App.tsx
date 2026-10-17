@@ -1,5 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
-import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon, Plus, X} from 'lucide-react';
+import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon, Plus, X, Columns2} from 'lucide-react';
+import {CameraCapture, isMobileCameraDevice} from './components/CameraCapture';
+import {ComparisonView} from './components/ComparisonView';
 
 type StepImage = {id: string; label: string; url: string};
 type TraceStep = {id: string; label: string; model: string | null; libraries: Record<string, string>; python: string;
@@ -31,7 +33,12 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [mobile] = useState(isMobileCameraDevice);
+  const [cameraOpen, setCameraOpen] = useState(isMobileCameraDevice);
+  const [comparing, setComparing] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState<'input' | 'result'>('input');
   const input = useRef<HTMLInputElement>(null);
+  const nativeCameraInput = useRef<HTMLInputElement>(null);
   const appendSelection = useRef(false);
   const requestLock = useRef(false);
   const busy = submitting || !!(job && !finished.includes(job.status));
@@ -57,37 +64,19 @@ export default function App() {
   }, [files]);
 
   useEffect(() => {
-    let stream: MediaStream | undefined;
-    let disposed = false;
-    let cameraReady = false;
-    const fallbackTimer = window.setTimeout(() => {
-      if (!cameraReady) setMessage('Camera is taking too long. You can choose a photo instead.');
-    }, 4000);
-    const openCamera = async () => {
-      if (!navigator.mediaDevices?.getUserMedia) { setMessage('Camera is not available on this device.'); return; }
+    if (!job || finished.includes(job.status)) return;
+    const events = new EventSource('/api/jobs/' + job.job_id + '/events');
+    events.onmessage = event => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}}, audio: false});
-        if (disposed) { stream.getTracks().forEach(track => track.stop()); return; }
-        const source = video.current;
-        if (!source) return;
-        const markReady = () => {
-          if (!disposed && source.videoWidth > 0 && source.videoHeight > 0) {
-            cameraReady = true;
-            window.clearTimeout(fallbackTimer);
-            setReady(true);
-            setMessage('Keep the garment fully in frame');
-          }
-        };
-        source.srcObject = stream;
-        source.addEventListener('loadedmetadata', markReady, {once: true});
-        source.addEventListener('loadeddata', markReady, {once: true});
-        await source.play();
-        markReady();
-      } catch { setMessage('Camera access was not granted. You can still choose a photo.'); }
+        const next: Job = JSON.parse(event.data);
+        setJob(next);
+        setError(next.status === 'error' ? next.error || 'Processing failed.' : '');
+        if (finished.includes(next.status)) events.close();
+      } catch {setError('Unable to read progress updates.');}
     };
-    void openCamera();
-    return () => { disposed = true; window.clearTimeout(fallbackTimer); stream?.getTracks().forEach(track => track.stop()); };
-  }, []);
+    events.onerror = () => setError('Connection lost. Reconnecting…');
+    return () => events.close();
+  }, [job?.job_id]);
 
   const select = (selection: File[], append = false) => {
     if (!selection.length || busy) return;
@@ -99,14 +88,19 @@ export default function App() {
     if (next.reduce((total, photo) => total + photo.size, 0) > 48_000_000) {
       setError('Maximum total upload size: 48 MB.'); return;
     }
-    setFiles(next); setJob(null); setError(''); setShowHistory(false);
+    setFiles(next); setJob(null); setError(''); setShowHistory(false); setMobilePanel('input');
   };
-  const pickPhotos = (append = false) => {appendSelection.current = append; input.current?.click();};
-  const updatePhotos = (next: File[]) => {setFiles(next); setJob(null); setError(''); setShowHistory(false);};
+  const pickPhotos = (append = false) => {
+    appendSelection.current = append;
+    if (mobile) setCameraOpen(true);
+    else input.current?.click();
+  };
+  const updatePhotos = (next: File[]) => {setFiles(next); setJob(null); setError(''); setShowHistory(false); setMobilePanel('input');};
   const generate = async () => {
     if (!file || busy || requestLock.current) return;
     requestLock.current = true;
     setSubmitting(true); setJob(null); setError(''); setStartedAt(Date.now()); setElapsed(0); setShowHistory(false);
+    setMobilePanel('result');
     try {
       const body = new FormData(); body.append('file', file);
       files.slice(1).forEach(photo => body.append('additional_files', photo));
@@ -119,19 +113,26 @@ export default function App() {
   };
 
   return <div className="app">
-    <header><span className="brand">sartiq<span className="brand-dot">.</span></span><span className="header-label">Studio</span></header>
-    <main>
-      <h1>Catalogue photography.</h1>
+    <header className="site-header"><span className="brand">sartiq<span className="brand-dot">.</span></span><span className="header-label">Studio</span></header>
+    <main className="studio">
+      <div className="studio-heading"><h1>Catalogue studio.</h1>{files.length > 0 && <span className="photo-count">{files.length} / 5 photos</span>}</div>
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy} onChange={e => {select(Array.from(e.target.files || []), appendSelection.current); e.target.value = '';}}/>
+      {mobile && <input ref={nativeCameraInput} type="file" accept="image/*" capture="environment" hidden disabled={busy}
+        onChange={event => {select(Array.from(event.target.files || []), appendSelection.current); event.target.value = ''; setCameraOpen(false);}}/>}
+      <div className="preview-tabs" aria-label="Preview selection">
+        <button aria-pressed={mobilePanel === 'input'} onClick={() => setMobilePanel('input')}>Original</button>
+        <button aria-pressed={mobilePanel === 'result'} disabled={!currentImage && !busy} onClick={() => setMobilePanel('result')}>{busy ? 'In progress' : 'Result'}</button>
+      </div>
       <div className="comparison">
-        <section aria-label="Original photo">
+        <section aria-label="Original photo" data-active={mobilePanel === 'input'}>
           <div className="caption"><span>{files.length > 1 ? 'Main photo' : 'Original'}</span>{file && <span className="filename" title={file.name}>{file.name}</span>}</div>
           <button className={'photo upload ' + (dragging ? 'dragging' : '')} disabled={busy} aria-label={preview ? 'Change photos' : 'Upload photos'}
             onClick={() => pickPhotos()} onDragOver={e => {e.preventDefault(); if (!busy) setDragging(true);}}
             onDragLeave={() => setDragging(false)} onDrop={e => {e.preventDefault(); setDragging(false); select(Array.from(e.dataTransfer.files), files.length > 0);}}>
             {preview ? <><img src={preview} alt="Main product reference"/><span className="change">Change photos</span></> :
-              <div className="empty"><Upload size={24} strokeWidth={1.5}/><strong>Upload photos</strong><span>or drop them here</span><small>Up to 5 · same product · 12 MB each</small></div>}
+              <div className="empty"><Upload size={26} strokeWidth={1.4}/><strong>{mobile ? 'Take a photo' : 'Add product photos'}</strong>{!mobile && <span>Drop here or browse</span>}<small>JPG, PNG, WebP · 12 MB each</small></div>}
           </button>
+          {mobile && <button className="library-link" disabled={busy} onClick={() => {appendSelection.current = files.length > 0; input.current?.click();}}><ImageIcon size={16}/>Choose from photos</button>}
           {files.length > 0 && <div className="input-views" aria-label="Product reference photos">
             <div className="view-thumbnails">{files.map((photo, index) => <div className={'view-thumbnail ' + (index === 0 ? 'selected' : '')} key={previews[index] || index}>
               <button className="view-select" disabled={busy} aria-label={index === 0 ? 'Main photo' : `Use photo ${index + 1} as main`} aria-pressed={index === 0}
@@ -141,14 +142,13 @@ export default function App() {
               <button className="view-remove" disabled={busy} aria-label={`Remove photo ${index + 1}`} onClick={() => updatePhotos(files.filter((_, position) => position !== index))}><X size={12}/></button>
             </div>)}
             {files.length < 5 && <button className="add-view" disabled={busy} onClick={() => pickPhotos(true)} aria-label="Add photos"><Plus size={20}/><span>Add</span></button>}</div>
-            <p className="views-hint">Main photo sets the view. Add details or other angles.</p>
           </div>}
         </section>
-        <section aria-label="Current image" aria-busy={busy}>
+        <section aria-label="Current image" aria-busy={busy} data-active={mobilePanel === 'result'}>
           <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">Ready</span>}</div>
           <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing' : '')}>
-            {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/><span className="live-caption">{busy && <Loader2 className="spinner" size={13}/>} {currentImage.label}</span></> :
-              <div className="empty">{busy ? <><Loader2 className="spinner" size={28} strokeWidth={1.5}/><strong>Creating your studio shot</strong></> : <><ImageIcon size={26} strokeWidth={1.3}/><span>Your photo, on white.</span></>}</div>}
+            {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/>{busy && <span className="live-caption"><Loader2 className="spinner" size={13}/>{currentImage.label}</span>}</> :
+              <div className="empty">{busy ? <><Loader2 className="spinner" size={28} strokeWidth={1.5}/><strong>Creating photo</strong></> : <><ImageIcon size={28} strokeWidth={1.3}/><span>Your studio photo</span></>}</div>}
           </div>
         </section>
       </div>
@@ -157,9 +157,18 @@ export default function App() {
           <span className="elapsed" aria-label="Elapsed time">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span></div>
         <div className="progress-track" role="progressbar" aria-label="Completed stages" aria-valuemin={0} aria-valuemax={phases.length} aria-valuenow={Math.max(0, phaseIndex)} aria-valuetext={progressLabel}>
           {phases.map((phase, i) => <span key={phase.status} className={i < phaseIndex ? 'done' : i === phaseIndex ? 'current' : ''}/>)}</div>
-        <p className="wait-note">This may take a few minutes.</p>
       </div>}
       {error && <p className="error" role="alert">{error}</p>}
+      <div className="actions">
+        <button className="primary" onClick={generate} disabled={!file || busy}>{busy ? <><Loader2 className="spinner" size={16}/>Processing</> : <>{job?.result_url ? 'Regenerate' : 'Generate photo'}<ArrowRight size={17}/></>}</button>
+        {job?.result_url && <>
+          <button className="secondary" onClick={() => setComparing(true)}><Columns2 size={16}/>Compare</button>
+          <a className="open-result" href={job.result_url} target="_blank" rel="noreferrer">Open photo<ArrowUpRight size={16}/></a>
+        </>}
+        {canViewHistory && <button className="history-toggle" aria-expanded={showHistory} aria-controls="image-history" onClick={() => setShowHistory(value => !value)}>
+          {showHistory ? 'Hide steps' : 'View steps'}<ChevronDown size={16} className={showHistory ? 'expanded' : ''}/>
+        </button>}
+      </div>
       {!!job?.execution_trace?.length && <details className="execution-details">
         <summary>Execution details{busy && currentStep && <span>{currentStep.model || Object.keys(currentStep.libraries).filter(name => name !== 'LangGraph').join(' · ')}</span>}</summary>
         <div className="execution-list">
@@ -175,14 +184,7 @@ export default function App() {
           </article>)}
         </div>
       </details>}
-      <div className="actions">
-        <button className="primary" onClick={generate} disabled={!file || busy}>{busy ? 'Processing…' : job?.result_url ? 'Regenerate' : 'Generate photo'}{!busy && <ArrowRight size={17}/>}</button>
-        {job?.result_url && <a className="open-result" href={job.result_url} target="_blank" rel="noreferrer">Open photo<ArrowUpRight size={17}/></a>}
-        {canViewHistory && <button className="history-toggle" aria-expanded={showHistory} aria-controls="image-history" onClick={() => setShowHistory(value => !value)}>
-          {showHistory ? 'Hide steps' : job?.status === 'error' ? 'View available steps' : 'View all steps'}<ChevronDown size={16} className={showHistory ? 'expanded' : ''}/>
-        </button>}
-      </div>
-      {job?.result_url && <p className="review-note">{job.classification?.review_required
+      {job?.result_url && job.status === 'review_required' && <p className="review-note">{job.classification?.review_required
         ? 'Product identification is uncertain. Check that the result shows the intended item.'
         : job.status === 'review_required' ? 'Check colors, prints and details before publishing.' : 'Check details before publishing.'}</p>}
       {canViewHistory && showHistory && <section id="image-history" className="image-history" aria-label="Intermediate images">
@@ -194,5 +196,10 @@ export default function App() {
         </figure>)}
       </section>}
     </main>
+    {cameraOpen && mobile && <CameraCapture onClose={() => setCameraOpen(false)}
+      onCapture={photo => {select([photo], appendSelection.current); setCameraOpen(false);}}
+      onPhotos={() => {setCameraOpen(false); input.current?.click();}}
+      onNativeCamera={() => nativeCameraInput.current?.click()}/>}
+    {comparing && preview && job?.result_url && <ComparisonView original={preview} result={job.result_url} onClose={() => setComparing(false)}/>}
   </div>;
 }
