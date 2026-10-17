@@ -1,4 +1,6 @@
 backend/.env
+# Override the repository-wide .env.* rule for the safe configuration template.
+!backend/.env.example
 **/.venv/
 **/__pycache__/
 frontend/node_modules/

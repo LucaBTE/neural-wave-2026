@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-THRESHOLDS = {"color_distance_max": 0.60, "lightness_shift_max": 0.45,
+THRESHOLDS = {"color_distance_max": 0.60, "print_color_distance_max": 0.45, "lightness_shift_max": 0.45,
               "white_background_fraction_min": 0.98}
 
 
@@ -32,6 +32,13 @@ def compare_product(original, original_mask, result, result_mask) -> dict:
         return cv2.normalize(hist, None, norm_type=cv2.NORM_L1)
 
     color = float(cv2.compareHist(histogram(a, ma), histogram(b, mb), cv2.HISTCMP_BHATTACHARYYA))
+    # A small red print must not be hidden by a much larger white fabric region.
+    colorful_a = ma & (cv2.cvtColor(a, cv2.COLOR_RGB2HSV)[:, :, 1] > 60)
+    colorful_b = mb & (cv2.cvtColor(b, cv2.COLOR_RGB2HSV)[:, :, 1] > 60)
+    print_distance = None
+    if colorful_a.sum() >= 32:
+        print_distance = (float(cv2.compareHist(histogram(a, colorful_a), histogram(b, colorful_b),
+                          cv2.HISTCMP_BHATTACHARYYA)) if colorful_b.sum() >= 32 else 1.0)
     iou = float(np.count_nonzero(ma & mb) / max(1, np.count_nonzero(ma | mb)))
     aspect = min(aspect_a, aspect_b) / max(aspect_a, aspect_b)
     overlap = cv2.erode((ma & mb).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
@@ -47,6 +54,8 @@ def compare_product(original, original_mask, result, result_mask) -> dict:
     lightness_shift = abs(float(np.median(cv2.cvtColor(a, cv2.COLOR_RGB2LAB)[:, :, 0][ma]))
                           - float(np.median(cv2.cvtColor(b, cv2.COLOR_RGB2LAB)[:, :, 0][mb]))) / 255
     warnings = []
+    if print_distance is not None and print_distance > THRESHOLDS["print_color_distance_max"]:
+        warnings.append("Colors in the print or colored garment details differ from the color reference.")
     if lightness_shift > THRESHOLDS["lightness_shift_max"]:
         warnings.append("Garment lightness differs substantially from the source.")
     if color > THRESHOLDS["color_distance_max"]:
@@ -59,7 +68,7 @@ def compare_product(original, original_mask, result, result_mask) -> dict:
     if white_fraction < THRESHOLDS["white_background_fraction_min"]:
         warnings.append("The background is not uniformly white.")
     return {"status": "review_required" if warnings else "passed", "passed": not warnings,
-            "metrics": {"lightness_shift": round(lightness_shift, 4), "white_background_fraction": round(white_fraction, 4), "color_distance": round(color, 4), "silhouette_iou": round(iou, 4),
+            "metrics": {"print_color_distance": round(print_distance, 4) if print_distance is not None else None, "lightness_shift": round(lightness_shift, 4), "white_background_fraction": round(white_fraction, 4), "color_distance": round(color, 4), "silhouette_iou": round(iou, 4),
                         "aspect_similarity": round(aspect, 4), "detail_similarity": round(detail, 4)},
             "thresholds": THRESHOLDS.copy(), "warnings": warnings,
             "note": "Color/background checks only; pose and folds may change. Print identity, exact lettering and texture require visual review; passing does not verify them."}

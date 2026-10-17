@@ -1,13 +1,19 @@
 from __future__ import annotations
 import threading
 import uuid
+import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pipeline import MODELS, build_pipeline, normalize_photo
+from fastapi.responses import Response, StreamingResponse
+from PIL import Image
+from pipeline import MODELS, build_pipeline, normalize_photo, generation_settings, png_bytes
+from garment_analysis import analysis_settings
+from execution_trace import begin_step, end_step
 
 load_dotenv(Path(__file__).with_name('.env'))
 app = FastAPI(title="Sartiq Catalogue Studio", version="0.2.0")
@@ -15,40 +21,91 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
                    allow_methods=["*"], allow_headers=["*"])
 pool = ThreadPoolExecutor(max_workers=3)
 lock = threading.Lock()
+changes = threading.Condition(lock)
 jobs: dict[str, dict] = {}
+TERMINAL = {'complete', 'review_required', 'error'}
 
 
 def update(job_id: str, **fields):
-    with lock:
+    with changes:
         jobs[job_id].update(fields)
+        jobs[job_id]['revision'] = jobs[job_id].get('revision', 0) + 1
+        changes.notify_all()
+
+
+def public_job(job_id: str) -> dict:
+    """Called under the job lock; image bytes are served separately, never in SSE."""
+    return {'job_id': job_id, **{key: value for key, value in jobs[job_id].items()
+                                if not key.startswith('_')}}
+
+
+def record_image(job_id: str, key: str, label: str, image: Image.Image | str):
+    data = None
+    if isinstance(image, Image.Image):
+        preview = image.copy()
+        preview.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+        data = png_bytes(preview)
+        url = f'/api/jobs/{job_id}/images/{key}'
+    else:
+        url = image  # An existing fal output/reference URL: no extra upload.
+    entry = {'id': key, 'label': label, 'url': url}
+    with changes:
+        job = jobs[job_id]
+        if data is not None:
+            job.setdefault('_images', {})[key] = data
+        history = [item for item in job.get('images', []) if item['id'] != key]
+        job.update(images=[*history, entry], current_image=entry,
+                   revision=job.get('revision', 0) + 1)
+        changes.notify_all()
 
 
 def studio_task(job_id: str, data: bytes):
+    started = perf_counter()
+    preparation = begin_step('prepare_image', 'Image preparation', None, {'Pillow': 'pillow'}, job_id)
+    prepared = False
     try:
-        state = build_pipeline(lambda **fields: update(job_id, **fields)).invoke(
-            {"image": normalize_photo(data), "garment": "clothing"})
+        update(job_id, status='preparing', execution_trace=[preparation])
+        image = normalize_photo(data)
+        preparation = end_step(preparation, perf_counter() - started)
+        prepared = True
+        update(job_id, execution_trace=[preparation])
+        state = build_pipeline(lambda **fields: update(job_id, **fields),
+                               lambda key, label, image: record_image(job_id, key, label, image),
+                               run_id=job_id).invoke(
+            {"image": image, "garment": "clothing", 'execution_trace': [preparation]})
         update(job_id, status='complete' if state['quality']['passed'] else 'review_required',
-               result_url=state['result_url'], quality=state['quality'])
+               result_url=state['result_url'], quality=state['quality'],
+               garment_description=state['garment_description'],
+               generation_prompt=state['generation_prompt'], metrics=state['metrics'], analysis=state['analysis'],
+               pressing_prompt=state['pressing_prompt'],
+               execution_trace=state['execution_trace'], target_selection=state['target_selection'])
     except Exception as exc:
+        if not prepared:
+            preparation = end_step(preparation, perf_counter() - started, 'error', error_type=type(exc).__name__)
+            update(job_id, execution_trace=[preparation])
         update(job_id, status='error', error=str(exc))
 
 
 @app.get('/api/config')
 def config():
-    return {'models': MODELS, 'output': {'width': 1200, 'height': 1800, 'background': 'white'}}
+    model, resolution = generation_settings()
+    analysis = analysis_settings()
+    return {'models': {**MODELS, 'restyling': model, 'pressing': model, 'description': analysis['model']}, 'generation_resolution': resolution,
+            'inference_requests_per_run': 5, 'analysis': analysis,
+            'output': {'width': 1200, 'height': 1800, 'background': 'white'}}
 
 
 @app.post('/api/studio', status_code=202)
 async def studio(file: UploadFile = File(...)):
     if file.content_type not in ('image/png', 'image/jpeg', 'image/webp'):
-        raise HTTPException(400, 'Carica una foto PNG, JPG o WebP')
+        raise HTTPException(400, 'Upload a PNG, JPG or WebP photo')
     data = await file.read(12_000_001)
     if len(data) > 12_000_000:
-        raise HTTPException(413, 'Dimensione massima: 12 MB')
+        raise HTTPException(413, 'Maximum file size: 12 MB')
     try:
         normalize_photo(data)
     except Exception:
-        raise HTTPException(400, 'Immagine non valida')
+        raise HTTPException(400, 'Invalid image')
     job_id = uuid.uuid4().hex
     with lock:
         jobs[job_id] = {'status': 'queued', 'error': None, 'result_url': None}
@@ -61,5 +118,46 @@ def get_job(job_id: str):
     with lock:
         job = jobs.get(job_id)
         if job is None:
-            raise HTTPException(404, 'Elaborazione non trovata')
-        return {'job_id': job_id, **job}
+            raise HTTPException(404, 'Job not found')
+        return public_job(job_id)
+
+
+@app.get('/api/jobs/{job_id}/images/{image_id}')
+def get_image(job_id: str, image_id: str):
+    with lock:
+        image = jobs.get(job_id, {}).get('_images', {}).get(image_id)
+    if image is None:
+        raise HTTPException(404, 'Image not found')
+    return Response(content=image, media_type='image/png',
+                    headers={'Cache-Control': 'private, max-age=3600'})
+
+
+def job_events(job_id: str):
+    """One connection: snapshots on changes, comments to keep idle streams alive.
+
+    Reconnecting receives the current snapshot, so missed events are harmless.
+    No lock is held while sending data to a slow client.
+    """
+    revision = -1
+    while True:
+        with changes:
+            changed = changes.wait_for(
+                lambda: jobs[job_id].get('revision', 0) != revision, timeout=15)
+            snapshot = public_job(job_id) if changed else None
+            if snapshot is not None:
+                revision = snapshot.get('revision', 0)
+        if snapshot is None:
+            yield ': keepalive\n\n'
+            continue
+        yield 'data: ' + json.dumps(snapshot) + '\n\n'
+        if snapshot['status'] in TERMINAL:
+            return
+
+
+@app.get('/api/jobs/{job_id}/events')
+def events(job_id: str):
+    with lock:
+        if job_id not in jobs:
+            raise HTTPException(404, 'Job not found')
+    return StreamingResponse(job_events(job_id), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

@@ -1,7 +1,19 @@
 import {useEffect, useRef, useState} from 'react';
-import {Camera, UploadCloud, Sparkles, Download, ArrowRight} from 'lucide-react';
+import {Upload, ArrowUpRight, ArrowRight, ChevronDown, Loader2, Image as ImageIcon} from 'lucide-react';
 
-type Job = {job_id: string; status: string; result_url?: string; error?: string};
+type StepImage = {id: string; label: string; url: string};
+type TraceStep = {id: string; label: string; model: string | null; libraries: Record<string, string>; python: string;
+  status: string; seconds: number | null; details: {cache_hit?: boolean; resolution?: string; model_invoked?: boolean}};
+type Job = {job_id: string; status: string; result_url?: string; error?: string; current_image?: StepImage; images?: StepImage[]; execution_trace?: TraceStep[]};
+const phases = [
+  {status: 'preparing', label: 'Preparing'},
+  {status: 'balancing_color', label: 'Balancing colors'},
+  {status: 'describing', label: 'Analyzing garment'},
+  {status: 'generating', label: 'Creating photo'},
+  {status: 'pressing', label: 'Removing wrinkles'},
+  {status: 'finishing', label: 'Refining'},
+  {status: 'checking_quality', label: 'Final check'},
+];
 const finished = ['complete', 'review_required', 'error'];
 
 export default function App() {
@@ -10,9 +22,27 @@ export default function App() {
   const [job, setJob] = useState<Job | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const requestLock = useRef(false);
   const busy = submitting || !!(job && !finished.includes(job.status));
+  const currentImage = job?.result_url ? {id: 'final', label: 'Final output', url: job.result_url} : job?.current_image;
+  const canViewHistory = !!job && finished.includes(job.status) && !!job.images?.length;
+  const currentStep = job?.execution_trace?.[job.execution_trace.length - 1];
+
+  const phaseIndex = phases.findIndex(phase => phase.status === job?.status);
+  const progressLabel = submitting ? 'Uploading' : job?.status === 'queued' ? 'Queued' : phases[phaseIndex]?.label || 'Processing';
+
+  useEffect(() => {
+    if (!busy || startedAt === null) return;
+    const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [busy, startedAt]);
 
   useEffect(() => {
     if (!file) return;
@@ -23,74 +53,102 @@ export default function App() {
 
   useEffect(() => {
     if (!job || finished.includes(job.status)) return;
-    const controller = new AbortController();
-    let stopped = false;
-    let timer: number;
-    const poll = async () => {
+    const events = new EventSource('/api/jobs/' + job.job_id + '/events');
+    events.onmessage = (event) => {
       try {
-        const response = await fetch('/api/jobs/' + job.job_id, {signal: controller.signal});
-        const data = await response.json();
-        if (!response.ok) throw Error(data.detail || 'Impossibile leggere il risultato');
-        if (stopped) return;
+        const data: Job = JSON.parse(event.data);
         setJob(data);
-        setError(data.status === 'error' ? data.error : '');
-        if (finished.includes(data.status)) return;
-      } catch (e) {
-        if (stopped) return;
-        setError('Connessione interrotta. Riprovo a recuperare il risultato…');
+        setError(data.status === 'error' ? data.error || 'Processing failed' : '');
+        if (finished.includes(data.status)) events.close();
+      } catch {
+        setError('Unable to read progress updates.');
       }
-      timer = window.setTimeout(poll, 1800);
     };
-    void poll();
-    return () => {stopped = true; controller.abort(); window.clearTimeout(timer);};
+    events.onerror = () => setError('Connection lost. Reconnecting…');
+    return () => events.close();
   }, [job?.job_id]);
 
   const select = (next?: File) => {
     if (!next || busy) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(next.type) || next.size > 12_000_000) {
-      setError('Scegli una foto JPG, PNG o WebP fino a 12 MB.'); return;
+      setError('Choose a JPG, PNG or WebP photo up to 12 MB.'); return;
     }
-    setFile(next); setJob(null); setError('');
+    setFile(next); setJob(null); setError(''); setShowHistory(false);
   };
   const generate = async () => {
     if (!file || busy || requestLock.current) return;
     requestLock.current = true;
-    setSubmitting(true); setJob(null); setError('');
+    setSubmitting(true); setJob(null); setError(''); setStartedAt(Date.now()); setElapsed(0); setShowHistory(false);
     try {
       const body = new FormData(); body.append('file', file);
       const response = await fetch('/api/studio', {method: 'POST', body});
       const data = await response.json();
-      if (!response.ok) throw Error(data.detail || 'Impossibile avviare la generazione');
+      if (!response.ok) throw Error(data.detail || 'Unable to start generation');
       setJob({job_id: data.job_id, status: 'queued'});
     } catch (e) {setError(e instanceof Error ? e.message : String(e));}
     finally {setSubmitting(false); requestLock.current = false;}
   };
 
   return <div className="app">
-    <header><a className="brand" href="/">SARTIQ <span className="brand-slash">/</span> <span className="brand-small">CATALOGUE STUDIO</span></a></header>
+    <header><span className="brand">sartiq<span className="brand-dot">.</span></span><span className="header-label">Studio</span></header>
     <main>
-      <div className="intro"><div><p className="eyebrow">IL TUO STUDIO FOTOGRAFICO</p><h1>Da una foto qualsiasi<br/>al tuo <em>catalogo.</em></h1><p className="lede">Sfondo bianco, luce da studio e un capo disposto con cura. Carica la foto: al resto pensiamo noi.</p></div></div>
-      <div className="workspace">
-        <section className="controls"><div className="panel">
-          <h2>La tua foto</h2>
-          <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={e => select(e.target.files?.[0])}/>
-          <button className={'drop ' + (preview ? 'has-file' : '')} disabled={busy} onClick={() => input.current?.click()} onDragOver={e => e.preventDefault()} onDrop={e => {e.preventDefault(); select(e.dataTransfer.files[0]);}}>
-            {preview ? <><img src={preview} alt="Foto caricata"/><div className="image-cover">Cambia foto</div></> : <><UploadCloud size={33}/><strong>Trascina qui la foto del capo</strong><span>oppure clicca · JPG, PNG, WebP · max 12 MB</span></>}
+      <h1>Catalogue photography.</h1>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={e => {select(e.target.files?.[0]); e.target.value = '';}}/>
+      <div className="comparison">
+        <section aria-label="Original photo">
+          <div className="caption"><span>Original</span>{file && <span className="filename" title={file.name}>{file.name}</span>}</div>
+          <button className={'photo upload ' + (dragging ? 'dragging' : '')} disabled={busy} aria-label={preview ? 'Change photo' : 'Upload a photo'}
+            onClick={() => input.current?.click()} onDragOver={e => {e.preventDefault(); if (!busy) setDragging(true);}}
+            onDragLeave={() => setDragging(false)} onDrop={e => {e.preventDefault(); setDragging(false); select(e.dataTransfer.files[0]);}}>
+            {preview ? <><img src={preview} alt="Original garment"/><span className="change">Change photo</span></> :
+              <div className="empty"><Upload size={24} strokeWidth={1.5}/><strong>Upload a photo</strong><span>or drop it here</span><small>JPG, PNG, WebP · max 12 MB</small></div>}
           </button>
-          <p className="hint">Un solo capo ben visibile, con stampe e dettagli a fuoco.</p>
-          <button className="primary generate" onClick={generate} disabled={!file || busy}><Sparkles size={17}/>{busy ? 'Creo la tua foto…' : 'Crea foto da catalogo'}<ArrowRight size={16}/></button>
-          <p className="hint">L’elaborazione può richiedere alcuni minuti.</p>
-        </div></section>
-        <section className="results" aria-live="polite">
-          <div className="results-heading"><h2>Prima e dopo</h2><span className="status">{busy ? 'IN ELABORAZIONE' : job?.result_url ? 'PRONTA' : 'CARICA UNA FOTO'}</span></div>
-          <div className="image-grid">
-            <div className="image-card"><div className="image-area">{preview ? <img src={preview} alt="Prima: foto originale"/> : <div className="placeholder"><Camera size={30}/><span>La tua foto originale</span></div>}</div><div className="image-caption">PRIMA</div></div>
-            <div className="image-card"><div className="image-area">{job?.result_url ? <img src={job.result_url} alt="Dopo: capo su sfondo bianco da studio"/> : <div className="placeholder"><Sparkles size={30}/><span>{busy ? 'Prepariamo il tuo scatto da studio…' : 'La foto da catalogo apparirà qui'}</span></div>}</div><div className="image-caption">DOPO</div></div>
+        </section>
+        <section aria-label="Current image" aria-busy={busy}>
+          <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">Ready</span>}</div>
+          <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing' : '')}>
+            {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/><span className="live-caption">{busy && <Loader2 className="spinner" size={13}/>} {currentImage.label}</span></> :
+              <div className="empty">{busy ? <><Loader2 className="spinner" size={28} strokeWidth={1.5}/><strong>Creating your studio shot</strong></> : <><ImageIcon size={26} strokeWidth={1.3}/><span>Your photo, on white.</span></>}</div>}
           </div>
-          {error && <div className="error" role="alert">{error}</div>}
-          {job?.result_url && <><a className="download" href={job.result_url} target="_blank" rel="noreferrer"><Download size={16}/>Apri la foto finale</a><p className="hint">{job.status === 'review_required' ? 'Controlla la resa dei colori rispetto al capo originale. ' : ''}Confronta sempre scritte, stampe e dettagli prima di pubblicare.</p></>}
         </section>
       </div>
-    </main><footer><span>SARTIQ — CATALOGUE STUDIO</span><span>DAL TUO CAPO ALLO SCATTO DA STUDIO</span></footer>
+      {busy && <div className="progress-panel">
+        <div className="progress-heading"><span role="status">{progressLabel}<span className="phase-count">{phaseIndex >= 0 ? ` · ${phaseIndex + 1}/${phases.length}` : ''}</span></span>
+          <span className="elapsed" aria-label="Elapsed time">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span></div>
+        <div className="progress-track" role="progressbar" aria-label="Completed stages" aria-valuemin={0} aria-valuemax={phases.length} aria-valuenow={Math.max(0, phaseIndex)} aria-valuetext={progressLabel}>
+          {phases.map((phase, i) => <span key={phase.status} className={i < phaseIndex ? 'done' : i === phaseIndex ? 'current' : ''}/>)}</div>
+        <p className="wait-note">This may take a few minutes.</p>
+      </div>}
+      {error && <p className="error" role="alert">{error}</p>}
+      {!!job?.execution_trace?.length && <details className="execution-details">
+        <summary>Execution details{busy && currentStep && <span>{currentStep.model || Object.keys(currentStep.libraries).filter(name => name !== 'LangGraph').join(' · ')}</span>}</summary>
+        <div className="execution-list">
+          {job.execution_trace.map(step => <article key={step.id} className="execution-step">
+            <div className="execution-heading"><strong>{step.label}</strong><span className={'execution-status ' + step.status}>
+              {step.status.replace(/_/g, ' ')}{step.seconds !== null && ` · ${step.seconds.toFixed(2)}s`}
+            </span></div>
+            <div className="execution-model">{step.model || 'Local processing'}{step.details.resolution && ` · ${step.details.resolution}`}</div>
+            <p>{Object.entries(step.libraries).map(([name, version]) => `${name} ${version}`).join(' · ')} · Python {step.python}</p>
+            {step.details.cache_hit && <small>Cached description · no model request</small>}
+          </article>)}
+        </div>
+      </details>}
+      <div className="actions">
+        <button className="primary" onClick={generate} disabled={!file || busy}>{busy ? 'Processing…' : job?.result_url ? 'Regenerate' : 'Generate photo'}{!busy && <ArrowRight size={17}/>}</button>
+        {job?.result_url && <a className="open-result" href={job.result_url} target="_blank" rel="noreferrer">Open photo<ArrowUpRight size={17}/></a>}
+        {canViewHistory && <button className="history-toggle" aria-expanded={showHistory} aria-controls="image-history" onClick={() => setShowHistory(value => !value)}>
+          {showHistory ? 'Hide steps' : job?.status === 'error' ? 'View available steps' : 'View all steps'}<ChevronDown size={16} className={showHistory ? 'expanded' : ''}/>
+        </button>}
+      </div>
+      {job?.result_url && <p className="review-note">{job.status === 'review_required' ? 'Check colors, prints and details before publishing.' : 'Check details before publishing.'}</p>}
+      {canViewHistory && showHistory && <section id="image-history" className="image-history" aria-label="Intermediate images">
+        {job?.images?.map((image, index) => <figure key={image.id}>
+          <a className={'history-image ' + (image.id === 'cutout' ? 'transparent' : '')} href={image.url} target="_blank" rel="noreferrer" aria-label={'Open ' + image.label}>
+            <img src={image.url} alt={image.label} loading="lazy"/>
+          </a>
+          <figcaption><span>{String(index + 1).padStart(2, '0')}</span>{image.label}</figcaption>
+        </figure>)}
+      </section>}
+    </main>
   </div>;
 }

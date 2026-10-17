@@ -1,4 +1,4 @@
-"""Live fal validation: four paid inference requests per input photo."""
+"""Live fal validation: five paid inference requests per uncached input photo."""
 import argparse
 import json
 import sys
@@ -23,7 +23,11 @@ def main():
         state = build_pipeline(lambda **event: print(name, event['status'], flush=True)).invoke(
             {'image': normalize_photo(photo.read_bytes()), 'garment': 'clothing'})
         state['result'].save(output / (name + '_studio.png'))
+        (output / (name + '_prompt.txt')).write_text(state['generation_prompt'], encoding='utf-8')
+        (output / (name + '_pressing_prompt.txt')).write_text(state['pressing_prompt'], encoding='utf-8')
         (output / (name + '_quality.json')).write_text(json.dumps(state['quality'], indent=2))
+        (output / (name + '_timings.json')).write_text(json.dumps(state['metrics'], indent=2))
+        (output / (name + '_trace.json')).write_text(json.dumps(state['execution_trace'], indent=2))
         print(name, state['quality']['status'], flush=True)
 
 
