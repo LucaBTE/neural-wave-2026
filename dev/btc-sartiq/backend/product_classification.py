@@ -125,6 +125,14 @@ def detection_box(response):
             continue
         if not (.15 <= cx <= .85 and .15 <= cy <= .85):
             continue
+        # A distant shirt on a side rack must not pass merely because its box
+        # center barely clears the outer margin. Require actual overlap with the
+        # central product area; this still permits hollow/off-center eyewear and
+        # full-length garments, without forcing a foreground point into the mask.
+        central_overlap = (max(0., min(right, .70) - max(left, .30)) *
+                           max(0., min(bottom, .80) - max(top, .25)))
+        if central_overlap / ((right - left) * (bottom - top)) < .25:
+            continue
         candidates.append(((cx-.5)**2 + (cy-.5)**2, box))
     if not candidates:
         raise RuntimeError('Could not locate the classified product in the image')

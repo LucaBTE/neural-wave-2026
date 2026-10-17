@@ -1,5 +1,23 @@
 # Sartiq Catalogue Studio
 
+## Desktop and mobile
+
+The desktop UI uses file selection and drag and drop, without requesting webcam
+access, including when the browser window is narrow. On phones and iPads, the
+rear-camera view opens initially; **Photos** selects existing images. Capture,
+close and permission failures release any active camera stream. If live capture
+is unavailable, **Take photo** uses the device camera picker. Live camera access
+requires HTTPS or localhost; the native picker remains available on other origins.
+
+Both layouts use the same dark Sartiq palette and multi-photo workflow. On small
+screens, **Original / Result** switches previews. Progress, intermediate images,
+model/library traces and the before/after comparison remain available.
+
+Frontend verification: `npm run build && npm run test:ui` from `frontend`.
+The browser check requires Node 22+ and Chrome (`CHROME_BIN` can override the
+binary), and simulates the camera and generation API. It covers desktop,
+narrow desktop, mobile capture and denied permission, without calling fal.
+
 ## Multiple input photos
 
 Upload **1–5 photos of the same product** (JPG/PNG/WebP, up to 12 MB each,
@@ -322,6 +340,19 @@ npm run dev
 ```
 
 Open http://127.0.0.1:5173. Restart the backend after upgrading. No additional dependencies beyond the previous LangGraph pipeline are needed.
+
+For mobile, keep the backend running, connect the phone to the same Wi-Fi as
+the computer and open the **Mobile** URL printed by `npm run dev`, for example
+`http://192.168.1.42:5173/`. There is no separate mobile server: the interface
+adapts to the device. Vite listens on the LAN and proxies `/api` to the local
+backend, so port 8000 does not need to be exposed to the phone. The printed URL
+uses the actual port, including if Vite selects another port because 5173 is busy.
+
+On a LAN HTTP address, use **Take photo** for the native camera or **Photos**
+for existing images. The embedded live camera preview requires HTTPS (localhost
+on the phone refers to the phone itself, not this computer). If the page cannot
+be reached, check that the devices share a network without client isolation and
+that the computer allows incoming connections on the printed frontend port.
 
 ## Pipeline
 

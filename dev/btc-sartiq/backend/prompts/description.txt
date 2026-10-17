@@ -1,6 +1,7 @@
 Describe this selected product for a catalogue photographer. Do not assume clothing.
 Analyze only the selected isolated product, originally centered in the source photo.
-Ignore hands, hangers and peripheral clothing worn by whoever is holding the product.
+The selected garment may originally be worn by the main foreground person; describe
+that garment, not the person. Ignore hands, hangers and OTHER peripheral clothing.
 Return English plain text, at most 120 words, with these fields: Type; Shape, proportions and fit when applicable;
 Construction; Fabric appearance; Observed colors; Print and lettering; Uncertainties.
 For garments, prioritize distinguishing details: oversized/regular/fitted cut when visible,

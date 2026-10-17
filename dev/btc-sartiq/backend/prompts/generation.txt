@@ -35,8 +35,11 @@ REFERENCE IMAGES
 Image 1 is a close crop of the selected, isolated product. Image 2 shows that SAME
 selected product at the original framing, with everything else masked to white.
 These are two views of ONE target, not two different garments. Reproduce only that
-target. Ignore any residual hand, hanger, person or peripheral clothing. Never select
-the holder's sleeve, a worn garment or a different background item as the product.
+target. The selected target may originally be worn by the main foreground person:
+extract and re-stage that SAME garment as a standalone flat lay. Remove the person,
+skin, hands, badge and lanyard while preserving the selected garment and its details.
+Ignore peripheral clothing, the holder's unrelated sleeve, hangers and background
+items. Never substitute a different displayed garment for the selected target.
 Use these images as the authority for garment identity, cut, construction, colors
 and printed artwork. Preserve those intrinsic attributes while replacing the source
 surface condition. Flattening the fabric is an explicitly authorized change.

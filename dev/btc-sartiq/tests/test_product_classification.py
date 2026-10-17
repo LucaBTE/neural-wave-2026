@@ -202,6 +202,21 @@ def test_detector_prefers_central_instance_of_requested_category_over_larger_one
     assert classification.detection_box(response) == [.4,.5,.6,.7]
 
 
+def test_distant_side_rack_garment_cannot_be_the_only_target():
+    # The box center passes the old .15 margin but the object is background inventory.
+    distant = {'x_min':.12, 'y_min':.18, 'x_max':.27, 'y_max':.40}
+    with pytest.raises(RuntimeError, match='Could not locate'):
+        classification.detection_box({'objects':[distant]})
+
+
+def test_central_worn_sweatshirt_wins_over_distant_hanging_shirt():
+    response = {'objects':[
+        {'x_min':.12,'y_min':.18,'x_max':.27,'y_max':.40},
+        {'x_min':.28,'y_min':.30,'x_max':.87,'y_max':.76},
+    ]}
+    assert classification.detection_box(response) == [.28,.30,.87,.76]
+
+
 def test_empty_detection_stops_without_caching_failure():
     image = Image.new('RGB', (200,200), 'white')
     calls = []

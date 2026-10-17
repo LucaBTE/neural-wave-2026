@@ -392,6 +392,45 @@ def test_print_only_mask_is_rejected_for_complete_shirt_box(fal_stub, monkeypatc
     assert not any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
 
 
+def test_worn_foreground_sweatshirt_isolated_without_side_rack_shirt(fal_stub, monkeypatch):
+    import json
+    _, _, calls, _, images = fal_stub
+    original = Image.new('RGB', (200, 200), 'gray')
+    original.paste('yellow', (24, 36, 54, 80))
+    original.paste('lightblue', (56, 60, 174, 152))
+    foreground = Image.new('L', original.size)
+    foreground.paste(255, (56, 60, 174, 152))
+    distant = Image.new('L', original.size)
+    distant.paste(255, (24, 36, 54, 80))
+    images.update({'https://sam':foreground, 'https://distant':distant})
+    stub = pipeline.call
+    def run(model, arguments):
+        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
+            calls.append((model, arguments))
+            return {'output':json.dumps({'label':'light blue sweatshirt worn by main person',
+                'category':'light blue sweatshirt', 'kind':'garment', 'confidence':.95})}
+        if model == pipeline.LOCALIZATION_MODEL:
+            calls.append((model, arguments))
+            assert arguments['prompt'] == 'light blue sweatshirt'
+            return {'objects':[
+                {'x_min':.12,'y_min':.18,'x_max':.27,'y_max':.4},
+                {'x_min':.28,'y_min':.30,'x_max':.87,'y_max':.76}]}
+        if model == pipeline.SAM_MODEL:
+            calls.append((model, arguments))
+            assert arguments['prompt'] == 'light blue sweatshirt'
+            return {'masks':[{'url':'https://distant'}, {'url':'https://sam'}]}
+        return stub(model, arguments)
+    monkeypatch.setattr(pipeline, 'call', run)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['mask'].tobytes() == foreground.tobytes()
+    assert state['classification']['kind'] == 'garment'
+    assert state['classification']['bbox'] == [.28,.30,.87,.76]
+    references = next(args['image_urls'] for model, args in calls if model == pipeline.RESTYLE_MODEL)
+    for url in references:
+        assert not np.any(np.all(np.asarray(images[url]) == (255,255,0), axis=2))
+    assert state['metrics']['inference_requests'] == 7
+
+
 def test_glasses_target_guides_sam_and_skips_clothing_restyling(fal_stub, monkeypatch):
     import json
     _, _, calls, _, images = fal_stub
