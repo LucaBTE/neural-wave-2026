@@ -10,7 +10,7 @@ import {preview} from 'vite';
 const profile = await mkdtemp(join(tmpdir(), 'sartiq-ui-'));
 const server = await preview({preview: {host: '127.0.0.1', port: 4179, strictPort: true}});
 const chrome = spawn(process.env.CHROME_BIN || 'google-chrome', [
-  '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-background-networking',
+  '--headless=new', '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-background-networking',
   '--disable-extensions', '--disable-sync', '--no-first-run', '--no-default-browser-check',
   '--autoplay-policy=no-user-gesture-required',
   '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
@@ -56,10 +56,31 @@ try {
     context.lineTo(325,255); context.lineTo(380,290); context.lineTo(400,210);
     context.lineTo(320,150); context.closePath(); context.fill();
     window.__fixture = canvas.toDataURL('image/png');
-    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {value: async () => {
+    Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', {value: async () => window.__optics ? [
+      {kind:'videoinput', deviceId:'rear', label:'Back Camera'},
+      {kind:'videoinput', deviceId:'ultra', label:'Back Ultra Wide Camera'},
+      {kind:'videoinput', deviceId:'broken', label:'Unavailable lens'},
+    ] : []});
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {value: async (options) => {
       window.__cameraRequests++;
       if (window.__denyCamera) throw new DOMException('Denied','NotAllowedError');
+      const deviceId = options.video.deviceId?.exact || 'rear';
+      if (deviceId === 'broken') throw new DOMException('Unavailable','NotReadableError');
+      window.__lastDevice = deviceId;
       const stream=canvas.captureStream(5);
+      const cameraTrack = stream.getVideoTracks()[0];
+      if (window.__optics) {
+        let zoom = 2;
+        cameraTrack.getCapabilities = () => ({zoom:{min:.5, max:4, step:.1}});
+        const settings = cameraTrack.getSettings.bind(cameraTrack);
+        cameraTrack.getSettings = () => ({...settings(), deviceId, zoom});
+        cameraTrack.applyConstraints = async (constraints) => {
+          if (window.__zoomError) throw new DOMException('Unsupported','OverconstrainedError');
+          const values = constraints.advanced.filter(item => item.zoom !== undefined);
+          if (values.length !== 1) throw new Error('Conflicting zoom constraints');
+          zoom = values[0].zoom; window.__appliedZoom = zoom;
+        };
+      } else cameraTrack.getCapabilities = () => ({});
       const tick=setInterval(()=>{context.fillStyle='#e8e8e1';context.fillRect(0,0,2,2);},100);
       for (const track of stream.getTracks()) {
         const stop=track.stop.bind(track); track.stop=()=>{window.__stopped++; clearInterval(tick); stop();};
@@ -75,11 +96,18 @@ try {
     const errors = [];
     let requests = 0;
     let filePickers = 0;
+    let failure = null;
     listeners.set(sessionId, event => {
       if (event.method === 'Page.fileChooserOpened') filePickers++;
       if (event.method === 'Runtime.exceptionThrown') errors.push(event.params.exceptionDetails.text);
       if (event.method === 'Fetch.requestPaused') {
         const {requestId, request} = event.params;
+        if (request.url.endsWith('/test-output.png')) {
+          setTimeout(() => void command('Fetch.fulfillRequest', {requestId, responseCode:200,
+            responseHeaders:[{name:'Content-Type',value:'image/png'},{name:'Cache-Control',value:'public, max-age=3600'}],
+            body:resultImage.split(',')[1]}), 1200);
+          return;
+        }
         const isEvents = request.url.endsWith('/events');
         if (!isEvents) requests++;
         const unverified = mode === 'desktop-unverified';
@@ -88,14 +116,15 @@ try {
           images: [{id:'final', label:'Final output', url:resultImage}],
           execution_trace: [{id:'restyle', label:'Creating photo', model:'Mock model',
             libraries:{}, python:'3', status:'complete', seconds:.1, details:{}}]};
-        void command('Fetch.fulfillRequest', {requestId, responseCode: isEvents ? 200 : 202,
+        setTimeout(() => void command('Fetch.fulfillRequest', {requestId, responseCode: isEvents ? 200 : 202,
           responseHeaders: [{name:'Content-Type', value:isEvents ? 'text/event-stream' : 'application/json'}],
-          body:Buffer.from(isEvents ? `data: ${JSON.stringify(job)}\n\n` : JSON.stringify({job_id:'mock'})).toString('base64')});
+          body:Buffer.from(isEvents ? `data: ${JSON.stringify(job)}\n\n` : JSON.stringify({job_id:'mock'})).toString('base64')}), isEvents && mode === 'desktop' ? 2500 : 250);
       }
     });
     await command('Page.enable'); await command('Runtime.enable');
+    if (mode === 'mobile-reduced-motion') await command('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion',value:'reduce'}]});
     await command('Page.setInterceptFileChooserDialog', {enabled:true});
-    await command('Fetch.enable', {patterns:[{urlPattern:'*://*/api/*'}]});
+    await command('Fetch.enable', {patterns:[{urlPattern:'*://*/api/*'},{urlPattern:'*://*/test-output.png'}]});
     await command('Emulation.setDeviceMetricsOverride', {
       width:mode.startsWith('desktop') ? 1440 : 390, height:mode.startsWith('desktop') ? 1100 : 844,
       deviceScaleFactor:1, mobile,
@@ -105,7 +134,7 @@ try {
       await command('Emulation.setTouchEmulationEnabled', {enabled:true});
     }
     await command('Page.addScriptToEvaluateOnNewDocument', {
-      source:(mode === 'mobile-denied' ? 'window.__denyCamera=true;' : '') + fixture,
+      source:(mode === 'mobile-denied' ? 'window.__denyCamera=true;' : '') + (mode.startsWith('mobile-zoom') ? `window.__optics=true;window.__zoomError=${mode === 'mobile-zoom-error'};` : '') + fixture,
     });
     const evaluate = async expression => {
       const result = await command('Runtime.evaluate', {expression, returnByValue:true, awaitPromise:true, userGesture:true});
@@ -123,21 +152,88 @@ try {
     await command('Page.navigate', {url:'http://127.0.0.1:4179'});
     await command('Page.bringToFront');
     await waitFor('!!document.querySelector(".studio")');
-    const resultImage = await evaluate('window.__fixture');
+    const resultImage = await evaluate(`(() => {const canvas=document.createElement('canvas'); canvas.width=600; canvas.height=900; const ctx=canvas.getContext('2d'); ctx.fillStyle='#efedf2'; ctx.fillRect(0,0,600,900); return canvas.toDataURL('image/png');})()`);
+    assert.equal(await evaluate('window.__cameraRequests'), 0, 'Home must not request the camera');
+    assert.equal(await evaluate('!!document.querySelector(".editorial-showcase")'), true);
+    assert.equal(await evaluate('document.querySelector(".editorial-showcase h1").textContent'), 'Your photo.A better presentation');
     if (mobile) {
+      const homeLayout = await evaluate(`(() => {const button=document.querySelector('.home-upload button').getBoundingClientRect(); const slider=document.querySelector('.editorial-reveal').getBoundingClientRect(); return {below:button.top>slider.bottom,camera:!!document.querySelector('.home-upload .lucide-camera')};})()`);
+      assert.deepEqual(homeLayout, {below:true,camera:true});
+      const mobileHomeShot = await command('Page.captureScreenshot', {format:'png'});
+      await writeFile(join(tmpdir(), `sartiq-home-${mode}.png`), Buffer.from(mobileHomeShot.data, 'base64'));
+    }
+    assert.equal(await evaluate('!!document.querySelector(".camera-screen")'), false);
+    const pipelineHome = await evaluate(`(() => {const pipeline=document.querySelector('.home-pipeline').getBoundingClientRect(); const slider=document.querySelector('.editorial-reveal').getBoundingClientRect(); const button=document.querySelector('.home-upload').getBoundingClientRect(); return {below:pipeline.top>=slider.bottom,above:pipeline.bottom<=button.top,steps:document.querySelectorAll('.home-pipeline li').length};})()`);
+    if (mode.startsWith('desktop')) {
+      const homeColumns = await evaluate(`(() => {const slider=document.querySelector('.editorial-reveal').getBoundingClientRect();return Array.from(document.querySelectorAll('.editorial-showcase h1,.home-pipeline,.home-upload,.desktop-upload-hint')).every(el=>el.getBoundingClientRect().right<slider.left);})()`);
+      assert.equal(homeColumns,true,'Desktop home keeps only the slider on the right');
+    } else assert.deepEqual(pipelineHome, {below:true,above:true,steps:3}, 'Mobile home pipeline sits between the comparison slider and upload button');
+    for (const position of [0, 25, 100]) {
+      await evaluate(`(() => {const slider=document.querySelector('.editorial-reveal input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '${position}'); slider.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      assert.equal(await evaluate('document.querySelector(".editorial-reveal__result").style.clipPath'), `inset(0px 0px 0px ${position}%)`);
+      assert.equal(await evaluate('document.querySelector(".editorial-reveal__line").style.left'), `${position}%`);
+    }
+    if (mode.startsWith('desktop')) {
+      assert.equal(await evaluate('document.querySelector(".editorial-showcase").getBoundingClientRect().bottom < innerHeight - 24'), true, 'Home card leaves a bottom margin');
+      const homeShot = await command('Page.captureScreenshot', {format:'png'});
+      await writeFile(join(tmpdir(), `sartiq-home-${mode}.png`), Buffer.from(homeShot.data, 'base64'));
+    }
+    if (mobile) {
+      await evaluate('document.querySelector(".home-upload button").click()');
       await waitFor('document.querySelector(".camera-screen")?.open && window.__cameraRequests > 0');
+      assert.equal(await evaluate('document.activeElement === document.querySelector(".camera-screen")'), true, 'Opening the camera must not autofocus a mode button');
+      assert.equal(await evaluate('getComputedStyle(document.querySelector(".camera-mode button")).outlineStyle'), 'none');
       if (mode === 'mobile-denied') {
         await waitFor('!!document.querySelector(".camera-placeholder .secondary")');
         assert.equal(await evaluate('!!document.querySelector(".camera-library")'), true);
         await evaluate('document.querySelector(".camera-library").click()');
-        await waitFor('!document.querySelector(".camera-screen")');
         assert.equal(filePickers, 1, 'Denied camera must still allow photo library');
+        assert.equal(await evaluate('document.querySelector(".camera-screen").open'), true, 'Canceling the library must leave the camera open');
+        await evaluate(`(async()=>{const blob=await (await fetch(window.__fixture)).blob(); const transfer=new DataTransfer(); transfer.items.add(new File([blob],'library.png',{type:'image/png'})); const input=document.querySelector('.camera-screen input[type=file]:not([capture])'); input.files=transfer.files; input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+        await waitFor('!document.querySelector(".camera-screen") && document.querySelectorAll(".view-thumbnail").length === 1');
       } else {
         await waitFor('!document.querySelector(".shutter").disabled');
+        if (mode.startsWith('mobile-zoom')) {
+          await waitFor('document.querySelectorAll(".camera-zoom button").length === 3');
+          assert.equal(await evaluate('!!document.querySelector(".camera-screen input[type=range], .camera-lens, .camera-optics")'), false);
+          await evaluate(`document.querySelector('[aria-label="Zoom 0.5×"]').click()`);
+          if (mode === 'mobile-zoom-error') {
+            await waitFor('document.querySelector(".camera-control-error")?.textContent.includes("Unable to adjust zoom")');
+            assert.equal(await evaluate('document.querySelector(".camera-zoom button[aria-pressed=true]").textContent'), '2×');
+          } else {
+            await waitFor('window.__appliedZoom === .5');
+            assert.equal(await evaluate('document.querySelector(".camera-zoom button[aria-pressed=true]").textContent'), '0.5×');
+            await evaluate(`document.querySelector('[aria-label="Zoom 1×"]').click()`);
+            await waitFor('window.__appliedZoom === 1');
+          }
+          assert.equal(await evaluate('document.querySelector(".camera-zoom").parentElement.className'), 'camera-viewport');
+        } else assert.equal(await evaluate('!!document.querySelector(".camera-zoom")'), false);
+        assert.equal(await evaluate('getComputedStyle(document.querySelector(".camera-viewport video")).objectFit'), 'cover');
+        const frameSize = await evaluate('(() => {const frame=document.querySelector(".camera-viewport").getBoundingClientRect(); return {width:frame.width,height:frame.height};})()');
+        if (mode === 'mobile') cameraFrameBaseline = frameSize;
+        if (mode.startsWith('mobile-zoom')) assert.deepEqual(frameSize, cameraFrameBaseline, 'Zoom controls and errors must not change the camera frame dimensions');
+        const cameraRatio = await evaluate('(() => {const frame=document.querySelector(".camera-viewport").getBoundingClientRect(); return frame.width/frame.height;})()');
         const cameraScreenshot = await command('Page.captureScreenshot', {format:'png'});
         await writeFile(join(tmpdir(), 'sartiq-camera.png'), Buffer.from(cameraScreenshot.data, 'base64'));
-        await evaluate('document.querySelector(".shutter").click()');
-        await waitFor('!document.querySelector(".camera-screen") && document.querySelectorAll(".view-thumbnail").length === 1');
+        if (mode === 'mobile-multi') {
+          const modeStart = await evaluate('getComputedStyle(document.querySelector(".camera-mode"), "::before").transform');
+          assert.equal(await evaluate('getComputedStyle(document.querySelector(".camera-mode"), "::before").transitionDuration'), '0.33s');
+          await evaluate('document.querySelectorAll(".camera-mode button")[1].click()');
+          await waitFor(`getComputedStyle(document.querySelector('.camera-mode'), '::before').transform !== ${JSON.stringify(modeStart)}`);
+          for (let count = 1; count <= 2; count++) {
+            await evaluate('document.querySelector(".shutter").click()');
+            await waitFor(`document.querySelector('.camera-badge').textContent === '${count}'`);
+          }
+          assert.equal(requests, 0, 'Multi-photo mode waits for confirmation');
+          await evaluate('document.querySelector(".camera-deck").click()');
+          await waitFor('document.querySelectorAll(".camera-review img").length === 2');
+          await evaluate('document.querySelector(".camera-confirm").click()');
+        } else await evaluate('document.querySelector(".shutter").click()');
+        await waitFor('!document.querySelector(".camera-screen") && document.querySelector(".ready")?.textContent === "Ready"');
+        assert.equal(requests, 1, 'Capture must start generation once');
+        await waitFor('document.querySelector(".photo.upload img")?.naturalWidth > 0');
+        const capturedRatio = await evaluate('(() => {const img=document.querySelector(".photo.upload img"); return img.naturalWidth/img.naturalHeight;})()');
+        assert.ok(Math.abs(capturedRatio - cameraRatio) < .01, 'Captured crop must match the visible camera frame');
         assert.ok(await evaluate('window.__stopped > 0'), 'Camera tracks must stop after capture');
       }
     } else {
@@ -147,15 +243,37 @@ try {
       await evaluate('document.querySelector(".upload").click()');
       assert.equal(filePickers, 1, 'Desktop must open the file picker');
     }
+    await evaluate('document.querySelector(".site-header .brand").click()');
+    await waitFor('!!document.querySelector(".editorial-showcase")');
+    requests = 0;
     // Upload two local synthetic photos, then exercise actual UI/SSE transitions.
     await evaluate(`(async()=>{
       const blob=await (await fetch(window.__fixture)).blob(); const transfer=new DataTransfer();
       transfer.items.add(new File([blob],'front.png',{type:'image/png'}));
-      transfer.items.add(new File([blob],'detail.png',{type:'image/png'}));
+      const detailCanvas=document.createElement('canvas'); detailCanvas.width=768; detailCanvas.height=512;
+      const bitmap=await createImageBitmap(blob); detailCanvas.getContext('2d').drawImage(bitmap,0,0,768,512); bitmap.close();
+      const detailBlob=await new Promise(resolve=>detailCanvas.toBlob(resolve,'image/png'));
+      transfer.items.add(new File([detailBlob],'detail.png',{type:'image/png'}));
       const input=document.querySelector('input[type=file]:not([capture])');
-      input.files=transfer.files; input.dispatchEvent(new Event('change',{bubbles:true}));
+      if (${JSON.stringify(mode)} === 'desktop-laptop') {
+        document.querySelector('.studio').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+      } else {input.files=transfer.files; input.dispatchEvent(new Event('change',{bubbles:true}));}
     })()`);
     await waitFor('document.querySelectorAll(".view-thumbnail").length===2');
+    if (mode.startsWith('desktop')) {
+      assert.equal(await evaluate('getComputedStyle(document.querySelector(".workbench .comparison")).display'), 'grid');
+      assert.equal(await evaluate('!!document.querySelector(".desktop-workspace-heading p, .desktop-workspace-heading button")'), false);
+      assert.equal(await evaluate('getComputedStyle(document.querySelector(".desktop-workspace-heading")).textAlign'), 'center');
+      const stages = await evaluate(`(() => {const original=document.querySelector('.reference-panel').getBoundingClientRect(); const result=document.querySelector('.result-panel').getBoundingClientRect(); const connector=document.querySelector('.pipeline-connector').getBoundingClientRect(); return {equal:Math.abs(original.width-result.width)<1 && Math.abs(original.height-result.height)<1, between:connector.left>original.right && connector.right<result.left};})()`);
+      assert.deepEqual(stages, {equal:true,between:true}, 'Pipeline stages must be equal with the generate action between them');
+      const ratios = await evaluate(`Array.from(document.querySelectorAll('.reference-panel .photo,.result-panel .photo')).map(el=>{const r=el.getBoundingClientRect();return r.width/r.height;})`);
+      ratios.forEach(ratio => assert.ok(Math.abs(ratio - .75) < .005, 'Desktop image frames are portrait 3:4'));
+      assert.equal(await evaluate('getComputedStyle(document.querySelector(".reference-panel .photo img")).objectFit'), 'contain');
+      const thumbnailRail = await evaluate(`(() => {const thumbnails=Array.from(document.querySelectorAll('.view-thumbnail')).map(el=>el.getBoundingClientRect()); const card=document.querySelector('.reference-panel').getBoundingClientRect();return thumbnails[0].right<card.left && thumbnails[1].top>thumbnails[0].bottom && Math.abs(thumbnails[0].left-thumbnails[1].left)<1;})()`);
+      assert.equal(thumbnailRail,true,'Reference thumbnails form a vertical rail to the left of the original');
+      const prepareShot = await command('Page.captureScreenshot', {format:'png'});
+      await writeFile(join(tmpdir(), `sartiq-prepare-${mode}.png`), Buffer.from(prepareShot.data, 'base64'));
+    }
     await evaluate(`document.querySelector('[aria-label="Use photo 2 as main"]').click()`);
     await waitFor('document.querySelector(".filename").textContent==="detail.png"');
     await evaluate('document.querySelector(".primary").click()');
@@ -164,9 +282,32 @@ try {
       assert.ok(await evaluate('document.querySelector(".review-note")?.textContent.includes("Product count could not be verified")'));
     }
     assert.equal(requests, 1);
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".has-result")).backgroundColor'), 'rgb(221, 189, 253)');
+    if (mode.startsWith('desktop')) {
+      const layout = await evaluate(`(() => {const original=document.querySelector('.reference-panel').getBoundingClientRect(); const result=document.querySelector('.result-panel').getBoundingClientRect(); const actions=document.querySelector('.actions').getBoundingClientRect(); return {beside:original.right < result.left, aligned:Math.abs(original.top-result.top)<1, actionsVisible:actions.bottom<=innerHeight};})()`);
+      const resultShot = await command('Page.captureScreenshot', {format:'png'});
+      await writeFile(join(tmpdir(), `sartiq-result-${mode}.png`), Buffer.from(resultShot.data, 'base64'));
+      assert.deepEqual(layout, {beside:true, aligned:true, actionsVisible:true}, 'Desktop reference, result and actions should fit the workspace');
+    }
+    const resultFrame = await evaluate('(() => {const frame=document.querySelector(".photo.result").getBoundingClientRect(); return {width:frame.width,height:frame.height};})()');
+    assert.equal(await evaluate('!!document.querySelector(".pipeline-connector--active")'), false, 'Pipeline halo stops when the result is ready');
     await evaluate('document.querySelector(".actions .secondary").click()');
-    await waitFor('document.querySelector(".comparison-screen")?.open');
-    await evaluate(`document.querySelector('[aria-label="Close comparison"]').click()`);
+    await waitFor('!!document.querySelector(".comparison-slider")');
+    assert.equal(await evaluate('!!document.querySelector(".comparison-screen__top")'), false);
+    assert.equal(await evaluate(`!!document.querySelector('[aria-label="Close comparison"]')`), false);
+    assert.equal(await evaluate('document.body.style.overflow'), '');
+    await waitFor('document.querySelector(".comparison-slider__result img").complete');
+    const dimensions = await evaluate(`(() => {const frame=document.querySelector('.comparison-slider').getBoundingClientRect(); const original=document.querySelector('.comparison-slider > img').getBoundingClientRect(); const result=document.querySelector('.comparison-slider__result img').getBoundingClientRect(); return {ratio:frame.width/frame.height, originalWidth:original.width, resultWidth:result.width, originalHeight:original.height, resultHeight:result.height};})()`);
+    const comparedFrame = await evaluate('(() => {const frame=document.querySelector(".photo.result").getBoundingClientRect(); return {width:frame.width,height:frame.height};})()');
+    assert.deepEqual(comparedFrame, resultFrame, 'Compare must preserve the exact result frame');
+    assert.ok(Math.abs(dimensions.ratio - resultFrame.width/resultFrame.height) < .02, 'Slider fills the result frame');
+    assert.equal(dimensions.originalWidth, dimensions.resultWidth);
+    assert.equal(dimensions.originalHeight, dimensions.resultHeight);
+    if (mode.startsWith('desktop')) assert.equal(await evaluate('document.querySelector(".actions").getBoundingClientRect().bottom <= innerHeight'), true, 'Comparison actions stay visible on desktop');
+    const comparisonScreenshot = await command('Page.captureScreenshot', {format:'png'});
+    await writeFile(join(tmpdir(), `sartiq-compare-${mode}.png`), Buffer.from(comparisonScreenshot.data, 'base64'));
+    await evaluate('document.querySelector(".actions .secondary").click()');
+    await waitFor('!document.querySelector(".comparison-slider")');
     await evaluate('document.querySelector(".history-toggle").click()');
     await waitFor('!!document.querySelector("#image-history")');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'No horizontal page overflow');

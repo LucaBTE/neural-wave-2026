@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {startStudioJob} from '../lib/studioApi';
 
 export type StepImage = {id: string; label: string; url: string};
 export type Job = {
@@ -70,12 +71,8 @@ export function useStudioJob() {
     setJob(null);
     setError('');
     try {
-      const body = new FormData();
-      body.append('file', selectedFile);
-      const response = await fetch('/api/studio', {method: 'POST', body});
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Unable to start the transformation.');
-      setJob({job_id: data.job_id, status: 'queued'});
+      const jobId = await startStudioJob([selectedFile]);
+      setJob({job_id: jobId, status: 'queued'});
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
