@@ -26,7 +26,10 @@ from quality import compare_product
 
 
 @pytest.fixture(autouse=True)
-def fresh_analysis_cache():
+def fresh_analysis_cache(monkeypatch):
+    # Retain regression coverage for the optional staged workflow. Faithful-mode
+    # tests below explicitly clear this override and exercise the new default.
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'staged')
     clear_analysis_cache()
     clear_classification_cache()
     pipeline.clear_reuse_caches()
@@ -56,6 +59,8 @@ def fal_stub(monkeypatch):
 
     def call(model, arguments):
         calls.append((model, arguments))
+        if arguments.get('prompt','').startswith(pipeline.CHECK_PREFIX):
+            return {'output':'SINGLE'}
         if model == pipeline.LOCALIZATION_MODEL:
             return {'objects': [{'x_min':.25,'y_min':.2,'x_max':.75,'y_max':.8}]}
         if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
@@ -82,6 +87,310 @@ def fal_stub(monkeypatch):
     return original, mask, calls, uploads, images
 
 
+def test_default_profile_keeps_scene_colors_and_uses_one_generation(fal_stub, monkeypatch):
+    original, _, calls, _, images = fal_stub
+    monkeypatch.delenv('FAL_PIPELINE_PROFILE')
+    monkeypatch.delenv('FAL_IMAGE_MODEL', raising=False)
+    # A colored wall is useful context, but must not be treated as a gray card.
+    original.paste((210, 175, 130), (0, 0, 20, 100))
+    monkeypatch.setattr(pipeline, 'normalize_illumination',
+                        lambda *a: pytest.fail('Uncalibrated white balance changed the source'))
+    events = []
+    state = pipeline.build_pipeline(lambda **e: events.append(e)).invoke({'image': original})
+    assert pipeline.pipeline_profile() == 'faithful'
+    assert [model for model, _ in calls] == [pipeline.CLASSIFICATION_MODEL,
+        pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL, pipeline.FAITHFUL_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
+    assert state['metrics']['inference_requests'] == 6
+    assert state['analysis']['source'] == 'classification'
+    assert state['analysis']['separate_model_request'] is False
+    assert state['pressing_prompt'] == ''
+    assert state['color_reference'].tobytes() == original.tobytes()
+    generation = calls[3][1]
+    assert generation['image_urls'] == [state['reference_url']]
+    assert images[state['reference_url']].tobytes() == original.tobytes()
+    # The crop identifies the whole garment, rather than only a graphic on it.
+    assert images[state['color_url']].height >= 60
+    assert len(generation['prompt'].split()) < 450
+    assert generation['resolution'] == '2K'
+    assert 'Lay sleeves outward' in generation['prompt']
+    assert 'steam and press' in generation['prompt']
+    phases = next(e['stages'] for e in events if 'stages' in e)
+    assert len(phases) == 8
+    assert not {'describing', 'pressing'} & {p['status'] for p in phases}
+
+
+def test_faithful_finish_preserves_rgb_and_parts_missing_from_diagnostic_matte(fal_stub, monkeypatch):
+    original, _, _, _, images = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
+    # Simulate a thin pale strap that BiRefNet mistakenly omits. It must survive
+    # finalization, along with the generated surface and contact shadow.
+    generated = Image.new('RGB', (1200, 1800), (245, 245, 245))
+    generated.paste((240, 232, 216), (250, 250, 280, 800))
+    generated.paste((10, 10, 10), (300, 400, 900, 1400))
+    generated.paste((230, 230, 230), (300, 1400, 900, 1450))
+    images['https://generated'] = generated
+    matte = generated.convert('RGBA')
+    alpha = Image.new('L', generated.size)
+    alpha.paste(255, (300, 400, 900, 1400))
+    matte.putalpha(alpha)
+    images['https://biref'] = matte
+    state = pipeline.build_pipeline().invoke({'image': original})
+    assert state['result'].getpixel((265, 500)) == (240, 232, 216)
+    assert state['result'].getpixel((600, 1420)) == (230, 230, 230)
+    assert state['result'].getpixel((600, 800)) == (10, 10, 10)
+    assert state['result'].getpixel((0, 0)) == (245, 245, 245)
+    assert state['result_mask'].getpixel((265, 500)) == 0  # diagnostic only
+
+
+def test_color_guard_is_delivered_without_changing_models_or_mask_geometry(fal_stub, monkeypatch):
+    original,mask,calls,_,images = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
+    original.paste((27,28,32),(20,20,60,80))
+    generated = original.copy()
+    generated.paste((40,41,48),(20,20,60,80))
+    images['https://generated'] = generated
+    snapshots = []
+    state = pipeline.build_pipeline(on_image=lambda key,label,img:snapshots.append(key)).invoke({'image':original})
+    assert state['quality']['color_fidelity']['applied']
+    assert state['result'].getpixel((600,900))[0] < 40
+    assert state['generated_image'].getpixel((40,40)) == (40,41,48)
+    assert images[state['result_url']].tobytes() == state['result'].tobytes()
+    assert state['result_mask'].getbbox() == (300,450,900,1350)
+    assert 'color_fidelity' in snapshots and snapshots[-1] == 'final'
+    assert state['metrics']['inference_requests'] == 6
+    assert sum(model == pipeline.FAITHFUL_MODEL for model,_ in calls) == 1
+    assert state['execution_trace'][-1]['details']['color_fidelity']['applied']
+
+
+def test_generator_receives_each_actual_photo_once_without_an_automatic_crop(fal_stub, monkeypatch):
+    original,_,calls,_,images = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
+    detail = Image.new('RGB',(60,90),'purple')
+    state = pipeline.build_pipeline().invoke({'image':original,
+        'additional_images':[original.copy(),detail,detail.copy()]})
+    arguments = next(args for model,args in calls if model == pipeline.FAITHFUL_MODEL)
+    assert arguments['image_urls'] == [state['reference_url'],state['additional_reference_urls'][1]]
+    assert images[arguments['image_urls'][0]].tobytes() == original.tobytes()
+    assert images[arguments['image_urls'][1]].tobytes() == detail.tobytes()
+    assert 'INPUT: 2 reference images for ONE product.' in arguments['prompt']
+    assert state['execution_trace'][4]['details']['input_image_count'] == 2
+    assert state['quality']['single_product']['status'] == 'passed'
+
+
+@pytest.mark.parametrize('second_verdict',['SINGLE','DUPLICATE','UNCERTAIN','timeout'])
+def test_overlapping_duplicate_is_corrected_once_and_must_pass_recheck(fal_stub,monkeypatch,second_verdict):
+    original,_,calls,_,images = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
+    images['https://repaired'] = original.copy()
+    stub = pipeline.call
+    checks,repairs = [],[]
+    def run(model,arguments):
+        if arguments.get('prompt','').startswith(pipeline.CHECK_PREFIX):
+            calls.append((model,arguments))
+            checks.append(arguments)
+            if len(checks) == 1:
+                return {'output':'DUPLICATE'}
+            if second_verdict == 'timeout':
+                raise TimeoutError('Check unavailable')
+            return {'output':second_verdict}
+        if arguments.get('prompt','').startswith('Correct this catalogue photograph'):
+            calls.append((model,arguments))
+            repairs.append(arguments)
+            return {'images':[{'url':'https://repaired'}]}
+        return stub(model,arguments)
+    monkeypatch.setattr(pipeline,'call',run)
+    events,snapshots = [],[]
+    graph = pipeline.build_pipeline(lambda **e:events.append(e),lambda key,label,img:snapshots.append(key))
+    if second_verdict == 'SINGLE':
+        state = graph.invoke({'image':original})
+        assert state['result_url'] and state['pressed_url'] == 'https://repaired'
+        assert state['quality']['single_product']['status'] == 'passed'
+        assert state['quality']['single_product']['repair_attempted']
+        assert [r['verdict'] for r in state['product_checks']] == ['duplicate','single']
+        assert state['metrics']['inference_requests'] == 8
+        assert snapshots[-1] == 'final'
+        assert [s['id'] for s in state['execution_trace']][-5:] == [
+            'inspect','repair_product','inspect_repair','finish','verify']
+    else:
+        with pytest.raises(RuntimeError,match='single product could not be verified'):
+            graph.invoke({'image':original})
+        assert 'final' not in snapshots
+        assert not any(m == pipeline.BIREF_MODEL for m,_ in calls)
+        assert events[-1]['execution_trace'][-1]['id'] == 'inspect_repair'
+    assert len(checks) == 2 and len(repairs) == 1
+    assert repairs[0]['image_urls'] == ['https://generated']
+    assert repairs[0]['num_images'] == 1
+    assert repairs[0]['resolution'] == '2K'
+    assert 'product_repaired' in snapshots
+    stages = next(e['stages'] for e in events if any(p['status'] == 'correcting_product' for p in e.get('stages',[])))
+    assert len(stages) == 10
+
+
+def test_inconclusive_initial_check_keeps_output_but_never_claims_validation(fal_stub,monkeypatch):
+    original,_,calls,_,_ = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
+    stub = pipeline.call
+    def uncertain(model,arguments):
+        if arguments.get('prompt','').startswith(pipeline.CHECK_PREFIX):
+            calls.append((model,arguments))
+            return {'output':'UNCERTAIN'}
+        return stub(model,arguments)
+    monkeypatch.setattr(pipeline,'call',uncertain)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['result_url'] and state['quality']['status'] == 'review_required'
+    assert state['quality']['single_product']['status'] == 'unverified'
+    assert not state['quality']['single_product']['repair_attempted']
+    assert state['metrics']['inference_requests'] == 6
+    assert sum(model == pipeline.FAITHFUL_MODEL for model,_ in calls) == 1
+
+
+def test_api_never_publishes_a_known_duplicate_as_the_final_result(fal_stub,monkeypatch):
+    import server
+    original,_,calls,_,_ = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
+    stub = pipeline.call
+    def duplicate(model,arguments):
+        if arguments.get('prompt','').startswith(pipeline.CHECK_PREFIX):
+            calls.append((model,arguments))
+            return {'output':'DUPLICATE'}
+        return stub(model,arguments)
+    monkeypatch.setattr(pipeline,'call',duplicate)
+    identity = 'duplicate-rejected'
+    server.jobs[identity] = {'status':'queued','error':None,'result_url':None}
+    try:
+        server.studio_task(identity,pipeline.png_bytes(original))
+        job = server.jobs[identity]
+        assert job['status'] == 'error' and job['result_url'] is None
+        assert 'single product could not be verified' in job['error']
+        assert all(img['id'] != 'final' for img in job['images'])
+        assert job['execution_trace'][-1]['id'] == 'inspect_repair'
+    finally:
+        server.jobs.pop(identity)
+
+
+def test_faithful_regeneration_reuses_preprocessing_and_keeps_all_views(fal_stub, monkeypatch):
+    original, _, calls, _, images = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
+    extra = Image.new('RGB', (50, 80), 'green')
+    pipeline.build_pipeline().invoke({'image': original, 'additional_images': [extra]})
+    first_count = len(calls)
+    state = pipeline.build_pipeline().invoke({'image': original, 'additional_images': [extra]})
+    assert [m for m, _ in calls[first_count:]] == [pipeline.FAITHFUL_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
+    assert state['metrics']['inference_requests'] == 3
+    assert state['metrics']['reused_inferences'] == 3
+    assert state['metrics']['storage_uploads'] == 1
+    urls = calls[first_count][1]['image_urls']
+    assert len(urls) == 2 and images[urls[1]].tobytes() == extra.tobytes()
+    assert 'MULTI-VIEW REFERENCE RULES' in state['generation_prompt']
+    assert state['analysis']['view_count'] == 2
+
+
+def test_faithful_config_reports_actual_models_without_separate_analysis(monkeypatch):
+    import server
+    monkeypatch.delenv('FAL_PIPELINE_PROFILE')
+    monkeypatch.delenv('FAL_IMAGE_MODEL', raising=False)
+    monkeypatch.setenv('FAL_ANALYSIS_MODEL', 'fal-ai/sa2va/8b/image')
+    config = server.config()
+    assert config['inference_requests_per_run'] == 6
+    assert config['inference_requests_cached_run'] == 3
+    assert config['models']['restyling'] == pipeline.FAITHFUL_MODEL
+    assert config['models']['pressing'] is None
+    assert config['models']['description'] == config['analysis']['model'] == pipeline.CLASSIFICATION_MODEL
+    assert config['analysis']['source'] == 'classification'
+    monkeypatch.setenv('FAL_IMAGE_MODEL', pipeline.RESTYLE_MODEL)
+    assert pipeline.generation_settings()[0] == pipeline.RESTYLE_MODEL
+
+
+@pytest.mark.parametrize('stage', ['classify', 'locate', 'isolate', 'finish'])
+@pytest.mark.parametrize('response', ['empty', 'timeout'])
+def test_faithful_optional_model_failure_still_delivers_real_generation(fal_stub, monkeypatch, stage, response):
+    original, _, calls, _, images = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
+    stub = pipeline.call
+    model_for_stage = {'classify':pipeline.CLASSIFICATION_MODEL, 'locate':pipeline.LOCALIZATION_MODEL,
+                       'isolate':pipeline.SAM_MODEL, 'finish':pipeline.BIREF_MODEL}
+    def failing(model, arguments):
+        if model == model_for_stage[stage]:
+            calls.append((model, arguments))
+            if response == 'timeout':
+                raise pipeline.fal_client.client.FalClientTimeoutError(timeout=90)
+            return {}
+        return stub(model, arguments)
+    monkeypatch.setattr(pipeline, 'call', failing)
+    extra = Image.new('RGB', (100,150), 'purple')
+    events = []
+    state = pipeline.build_pipeline(lambda **e:events.append(e)).invoke(
+        {'image':original, 'additional_images':[extra]})
+    assert state['result_url'] and state['generated_url'] == 'https://generated'
+    assert stage in state['quality']['recovery']
+    assert sum(m == pipeline.FAITHFUL_MODEL for m, _ in calls) == 1
+    assert sum(m == model_for_stage[stage] and not args.get('prompt','').startswith(pipeline.CHECK_PREFIX) for m, args in calls) == 1  # no retry
+    assert not any(s['status'] == 'error' for s in state['execution_trace'])
+    assert state['metrics']['inference_requests'] == len(calls)
+    assert state['quality']['status'] == 'review_required'
+    generation = next(args for m,args in calls if m == pipeline.FAITHFUL_MODEL)
+    assert images[generation['image_urls'][-1]].tobytes() == extra.tobytes()
+    if stage != 'finish':
+        assert state['mask'] is None
+        assert images[state['reference_url']].tobytes() == original.tobytes()
+        assert images[state['color_url']].tobytes() == original.tobytes()
+        assert not state['classification']['selection_validation']['approved']
+    if stage in ('classify', 'locate'):
+        assert not any(m == pipeline.SAM_MODEL for m, _ in calls)
+        assert state['classification']['bbox'] is None
+    if stage == 'finish':
+        assert state['result_mask'] is None
+        assert state['quality']['metrics'] == {}
+
+
+def test_faithful_successful_edit_survives_all_helpers_being_unavailable(fal_stub, monkeypatch):
+    original, _, calls, _, _ = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
+    stub = pipeline.call
+    def only_generation(model, arguments):
+        if model != pipeline.FAITHFUL_MODEL:
+            calls.append((model, arguments))
+            return {}
+        return stub(model, arguments)
+    monkeypatch.setattr(pipeline, 'call', only_generation)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['result_url'] and state['generated_image'] is not None
+    assert state['mask'] is None and state['result_mask'] is None
+    assert set(state['recovery']) == {'classify','locate','isolate','finish'}
+    assert state['metrics']['inference_requests'] == 4
+    assert state['metrics']['reused_inferences'] == 0
+
+
+@pytest.mark.parametrize('profile', ['faithful', 'staged'])
+def test_job_reaches_final_output_when_main_is_detail_and_detector_returns_nothing(fal_stub, monkeypatch, profile):
+    import server
+    original, _, calls, _, _ = fal_stub
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', profile)
+    stub = pipeline.call
+    def no_detection(model, arguments):
+        if model == pipeline.LOCALIZATION_MODEL:
+            calls.append((model, arguments))
+            return {'objects':[]}
+        return stub(model, arguments)
+    monkeypatch.setattr(pipeline, 'call', no_detection)
+    identity = 'detail-recovery-' + profile
+    server.jobs[identity] = {'status':'queued', 'error':None, 'result_url':None}
+    try:
+        server.studio_task(identity, pipeline.png_bytes(original.crop((25,20,50,60))),
+                           [pipeline.png_bytes(original)] * 4)
+        job = server.jobs[identity]
+        assert job['status'] == 'review_required' and job['error'] is None
+        assert job['result_url'] and job['current_image']['id'] == 'final'
+        assert 'locate' in job['quality']['recovery']
+        assert not any(step['status'] == 'error' for step in job['execution_trace'])
+        assert job['classification']['bbox'] is None
+        generated = next(args for model,args in calls if 'image_urls' in args)
+        assert len(generated['image_urls']) == 2
+        assert 'most complete' in generated['prompt']
+    finally:
+        server.jobs.pop(identity)
+
+
 def test_full_graph_restyles_then_enforces_white_background(fal_stub):
     original, _, calls, uploads, _ = fal_stub
     events = []
@@ -89,24 +398,25 @@ def test_full_graph_restyles_then_enforces_white_background(fal_stub):
     state = pipeline.build_pipeline(lambda **e: events.append(e),
                                     lambda key, label, image: snapshots.append((key, label, image))).invoke({'image': original})
     assert [c[0] for c in calls] == [pipeline.CLASSIFICATION_MODEL, pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL, pipeline.DESCRIPTION_MODEL, pipeline.RESTYLE_MODEL,
-                                    pipeline.RESTYLE_MODEL, pipeline.BIREF_MODEL]
+                                    pipeline.RESTYLE_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
     assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 2
     # This synthetic source already has the exact isolated white background, so
     # the full-frame reference can reuse the original's identical PNG upload.
-    assert len(uploads) == 3
+    assert len(uploads) == 2
     assert [entry[0] for entry in snapshots] == ['original', 'target', 'mask', 'segmented', 'color',
         'reference', 'description', 'generated', 'pressed', 'cutout', 'composed', 'final']
     assert snapshots[-1][2] == state['result_url']
     assert snapshots[7][2] == state['generated_url']
     assert snapshots[8][2] == state['pressed_url'] == 'https://pressed'
     assert snapshots[9][2].mode == 'RGBA'
-    assert state['color_url'] != state['image_url']
-    assert calls[4][1]['image_urls'] == [state['color_url'], state['reference_url']]
+    assert state['color_url'] == state['image_url']
+    assert calls[4][1]['image_urls'] == [state['reference_url']]
     assert calls[3][1]['image_url'].startswith('data:image/jpeg;base64,')
     assert calls[3][1]['reasoning'] is False
     assert state['analysis']['status'] == 'complete'
     assert not state['analysis']['cache_hit']
-    assert state['garment_description'] in calls[4][1]['prompt']
+    assert 'Relaxed knitted sweater with ribbed cuffs.' in calls[4][1]['prompt']
+    assert 'Relaxed red' not in calls[4][1]['prompt']
     assert state['generation_prompt'] == calls[4][1]['prompt']
     assert any(event.get('generation_prompt') == state['generation_prompt'] for event in events)
     assert '<p>' not in state['garment_description']
@@ -114,14 +424,14 @@ def test_full_graph_restyles_then_enforces_white_background(fal_stub):
     assert calls[5][1]['image_urls'] == [state['generated_url']]
     assert calls[5][1]['prompt'] == state['pressing_prompt']
     assert calls[5][1]['resolution'] == calls[4][1]['resolution'] == '2K'
-    assert calls[6][1]['image_url'] == state['pressed_url']
+    assert calls[7][1]['image_url'] == state['pressed_url']
     assert state['result'].size == (1200, 1800)
     assert state['result'].getpixel((0, 0)) == (255, 255, 255)
     assert state['quality']['illumination']['status'] == 'uncertain'
-    assert set(state['metrics']['stages_seconds']) == {'classify', 'locate', 'isolate', 'balance', 'describe', 'restyle', 'press', 'finish', 'verify'}
+    assert set(state['metrics']['stages_seconds']) == {'classify', 'locate', 'isolate', 'balance', 'describe', 'restyle', 'press', 'inspect', 'finish', 'verify'}
     assert state['metrics']['total_seconds'] >= 0
     assert [step['id'] for step in state['execution_trace']] == [
-        'classify', 'locate', 'isolate', 'balance', 'describe', 'restyle', 'press', 'finish', 'verify']
+        'classify', 'locate', 'isolate', 'balance', 'describe', 'restyle', 'press', 'inspect', 'finish', 'verify']
     assert state['execution_trace'][4]['model'] == pipeline.DESCRIPTION_MODEL
     assert state['execution_trace'][5]['model'] == pipeline.RESTYLE_MODEL
     assert state['execution_trace'][3]['model'] is None
@@ -129,7 +439,7 @@ def test_full_graph_restyles_then_enforces_white_background(fal_stub):
     assert all(step['seconds'] is not None for step in state['execution_trace'])
     assert events[-1]['execution_trace'] == state['execution_trace']
     assert not state['quality']['passed']
-    assert {e['status'] for e in events} == {'classifying','locating','preparing','balancing_color','describing','generating','pressing','finishing','checking_quality'}
+    assert {e['status'] for e in events} == {'classifying','locating','preparing','balancing_color','describing','generating','pressing','checking_product','finishing','checking_quality'}
 
 
 def test_composition_recenters_without_changing_colors():
@@ -179,14 +489,14 @@ def test_regeneration_reuses_validated_inputs_but_generates_fresh_output(fal_stu
     first['mask'].putpixel((40, 40), 0)
     first['target_selection']['bbox'][0] = 999
     second = pipeline.build_pipeline().invoke({'image': original})
-    assert [model for model, _ in calls[first_calls:]] == [pipeline.RESTYLE_MODEL, pipeline.RESTYLE_MODEL, pipeline.BIREF_MODEL]
+    assert [model for model, _ in calls[first_calls:]] == [pipeline.RESTYLE_MODEL, pipeline.RESTYLE_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
     assert len(uploads) - first_uploads == 1  # fresh final deliverable only
     assert second['color_url'] == first['color_url']
     assert second['reference_url'] == first['reference_url']
     assert second['mask'].tobytes() == expected_mask.tobytes()
     assert second['target_selection']['bbox'][0] == 20
-    assert first['metrics']['inference_requests'] == 7
-    assert second['metrics']['inference_requests'] == 3
+    assert first['metrics']['inference_requests'] == 8
+    assert second['metrics']['inference_requests'] == 4
     assert second['metrics']['reused_inferences'] == 4
     assert second['metrics']['storage_uploads'] == 1
     assert second['execution_trace'][2]['details']['model_invoked'] is False
@@ -203,12 +513,12 @@ def test_concurrent_jobs_do_not_duplicate_preprocessing(fal_stub):
         return pipeline.build_pipeline().invoke({'image': original.copy()})
     with ThreadPoolExecutor(max_workers=2) as pool:
         states = list(pool.map(lambda _: generate(), range(2)))
-    assert len(calls) == 10  # four shared preprocessing + three fresh calls per garment
+    assert len(calls) == 12  # four shared preprocessing + four fresh calls per garment
     assert sum(model == pipeline.SAM_MODEL for model, _ in calls) == 1
     assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 4
     assert sum(model == pipeline.BIREF_MODEL for model, _ in calls) == 2
-    assert len(uploads) == 4  # two identical synthetic references + two deliverables
-    assert sum(state['metrics']['inference_requests'] for state in states) == 10
+    assert len(uploads) == 3  # one shared synthetic reference + two deliverables
+    assert sum(state['metrics']['inference_requests'] for state in states) == 12
     assert all(state['result_url'] for state in states)
 
 
@@ -221,24 +531,23 @@ def test_changed_source_invalidates_segmentation_cache(fal_stub):
     assert state['execution_trace'][2]['details']['model_invoked'] is True
 
 
-def test_finishing_overlaps_generated_download_and_background_inference(fal_stub, monkeypatch):
+def test_finishing_reuses_the_exact_image_already_checked_without_a_second_download(fal_stub, monkeypatch):
     original, _, _, _, _ = fal_stub
-    download_started, matte_started = threading.Event(), threading.Event()
+    downloads = []
     fetch, call = pipeline.fetch_image, pipeline.call
     def fetch_with_overlap(url):
         if url == 'https://pressed':
-            download_started.set()
-            assert matte_started.wait(3), 'BiRefNet should not wait for the image download'
+            downloads.append(url)
         return fetch(url)
     def call_with_overlap(model, arguments):
         if model == pipeline.BIREF_MODEL:
-            assert download_started.wait(3)
-            matte_started.set()
+            assert downloads == ['https://pressed']
+            assert any(args.get('prompt','').startswith(pipeline.CHECK_PREFIX) for _,args in fal_stub[2])
         return call(model, arguments)
     monkeypatch.setattr(pipeline, 'fetch_image', fetch_with_overlap)
     monkeypatch.setattr(pipeline, 'call', call_with_overlap)
     state = pipeline.build_pipeline().invoke({'image': original})
-    assert state['result_url'] and matte_started.is_set()
+    assert state['result_url'] and downloads == ['https://pressed']
 
 
 def test_fetch_inline_png_keeps_exact_rgb_and_alpha_without_network(monkeypatch):
@@ -320,17 +629,19 @@ def test_gray_corner_sleeve_cannot_reach_analysis_or_generator(fal_stub, monkeyp
         assert not np.any(np.all(np.asarray(images[url]) == (128,128,128), axis=2))
     analysis_image = Image.open(io.BytesIO(base64.b64decode(calls[3][1]['image_url'].split(',',1)[1])))
     assert not np.any(np.all(np.asarray(analysis_image) == (128,128,128), axis=2))
-    assert len(calls) == 7
+    assert len(calls) == 8
 
 
-def test_peripheral_only_detection_stops_before_analysis(fal_stub):
+def test_peripheral_only_mask_uses_original_references(fal_stub):
     original, _, calls, _, images = fal_stub
     mask = Image.new('L', original.size)
     mask.paste(255, (0,0,20,15))
     images['https://sam'] = mask
-    with pytest.raises(RuntimeError, match='image center'):
-        pipeline.build_pipeline().invoke({'image':original})
-    assert [model for model, _ in calls] == [pipeline.CLASSIFICATION_MODEL, pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL]
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['result_url'] and state['mask'] is None
+    assert state['target_selection']['strategy'] == 'source_references'
+    assert state['recovery']['isolate']['error_type'] == 'RuntimeError'
+    assert [model for model, _ in calls][:3] == [pipeline.CLASSIFICATION_MODEL, pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL]
 
 
 def test_printed_title_never_drives_detection_or_replaces_complete_shirt(fal_stub, monkeypatch):
@@ -375,11 +686,11 @@ def test_dress_misreported_as_other_uses_garment_prompt_and_two_nano_edits(fal_s
     state = pipeline.build_pipeline().invoke({'image':original})
     assert state['classification']['kind'] == 'garment'
     assert state['classification']['model_kind'] == 'other'
-    assert 'MANDATORY FRONT-VIEW RESTAGING' in state['generation_prompt']
+    assert 'front side up' in state['generation_prompt']
     assert state['pressing_prompt']
     assert next(step for step in state['execution_trace'] if step['id'] == 'press')['status'] == 'complete'
     assert len([model for model, _ in calls if model == pipeline.RESTYLE_MODEL]) == 2
-    assert state['metrics']['inference_requests'] == 7
+    assert state['metrics']['inference_requests'] == 8
 
 
 def test_print_only_mask_is_rejected_for_complete_shirt_box(fal_stub, monkeypatch):
@@ -387,9 +698,50 @@ def test_print_only_mask_is_rejected_for_complete_shirt_box(fal_stub, monkeypatc
     print_only = Image.new('L', original.size)
     print_only.paste(255, (30, 35, 50, 50))
     images['https://sam'] = print_only
-    with pytest.raises(RuntimeError, match='classified product'):
-        pipeline.build_pipeline().invoke({'image':original})
-    assert not any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['result_url'] and state['mask'] is None
+    assert state['target_selection']['strategy'] == 'source_references'
+    assert state['recovery']['isolate']['error_type'] == 'RuntimeError'
+    assert any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
+
+
+def test_worn_foreground_sweatshirt_isolated_without_side_rack_shirt(fal_stub, monkeypatch):
+    import json
+    _, _, calls, _, images = fal_stub
+    original = Image.new('RGB', (200, 200), 'gray')
+    original.paste('yellow', (24, 36, 54, 80))
+    original.paste('lightblue', (56, 60, 174, 152))
+    foreground = Image.new('L', original.size)
+    foreground.paste(255, (56, 60, 174, 152))
+    distant = Image.new('L', original.size)
+    distant.paste(255, (24, 36, 54, 80))
+    images.update({'https://sam':foreground, 'https://distant':distant})
+    stub = pipeline.call
+    def run(model, arguments):
+        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
+            calls.append((model, arguments))
+            return {'output':json.dumps({'label':'light blue sweatshirt worn by main person',
+                'category':'light blue sweatshirt', 'kind':'garment', 'confidence':.95})}
+        if model == pipeline.LOCALIZATION_MODEL:
+            calls.append((model, arguments))
+            assert arguments['prompt'] == 'light blue sweatshirt'
+            return {'objects':[
+                {'x_min':.12,'y_min':.18,'x_max':.27,'y_max':.4},
+                {'x_min':.28,'y_min':.30,'x_max':.87,'y_max':.76}]}
+        if model == pipeline.SAM_MODEL:
+            calls.append((model, arguments))
+            assert arguments['prompt'] == 'light blue sweatshirt'
+            return {'masks':[{'url':'https://distant'}, {'url':'https://sam'}]}
+        return stub(model, arguments)
+    monkeypatch.setattr(pipeline, 'call', run)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['mask'].tobytes() == foreground.tobytes()
+    assert state['classification']['kind'] == 'garment'
+    assert state['classification']['bbox'] == [.28,.30,.87,.76]
+    references = next(args['image_urls'] for model, args in calls if model == pipeline.RESTYLE_MODEL)
+    for url in references:
+        assert not np.any(np.all(np.asarray(images[url]) == (255,255,0), axis=2))
+    assert state['metrics']['inference_requests'] == 8
 
 
 def test_glasses_target_guides_sam_and_skips_clothing_restyling(fal_stub, monkeypatch):
@@ -445,18 +797,27 @@ def test_glasses_target_guides_sam_and_skips_clothing_restyling(fal_stub, monkey
     assert press_trace['status'] == 'skipped' and press_trace['model'] is None
     assert press_trace['details']['model_invoked'] is False
     assert 'pressed' not in snapshots and snapshots[-1] == 'final'
-    assert len(calls) == 6
+    assert len(calls) == 7
 
 
-def test_ambiguous_classification_stops_before_segmentation(fal_stub, monkeypatch):
+def test_ambiguous_classification_defers_identity_to_generator(fal_stub, monkeypatch):
     original, _, calls, _, _ = fal_stub
+    stub = pipeline.call
     def ambiguous(model, arguments):
-        calls.append((model, arguments))
-        return {'output': '{"label":"unknown","kind":"other","bbox":[0.2,0.2,0.8,0.8],"point":[0.5,0.5],"confidence":0.2}'}
+        if model == pipeline.CLASSIFICATION_MODEL:
+            calls.append((model, arguments))
+            return {'output': '{"label":"unknown","kind":"other","bbox":[0.2,0.2,0.8,0.8],"point":[0.5,0.5],"confidence":0.2}'}
+        return stub(model, arguments)
     monkeypatch.setattr(pipeline, 'call', ambiguous)
-    with pytest.raises(RuntimeError, match='no usable product identity'):
-        pipeline.build_pipeline().invoke({'image': original})
-    assert len(calls) == 1 and calls[0][0] == pipeline.CLASSIFICATION_MODEL
+    state = pipeline.build_pipeline().invoke({'image': original})
+    assert state['result_url']
+    assert not state['classification']['identity_supported']
+    assert state['classification']['confidence'] is None
+    assert state['classification']['bbox'] is None and state['mask'] is None
+    assert [model for model, _ in calls] == [pipeline.CLASSIFICATION_MODEL, pipeline.RESTYLE_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
+    assert state['metrics']['reused_inferences'] == 0
+    assert 'No reliable auxiliary classification' in state['generation_prompt']
+    assert 'SELECTED PRODUCT' not in state['generation_prompt']
 
 
 @pytest.mark.parametrize('consistent', [True, False])
@@ -485,16 +846,16 @@ def test_uncertain_classification_is_approved_only_when_detection_and_mask_agree
     assert state['quality']['passed'] is consistent
     assert bool(state['quality']['warnings']) is not consistent
     assert state['execution_trace'][0]['status'] == ('complete' if consistent else 'review_required')
-    assert len(calls) == 7
+    assert len(calls) == 8
     repeated = pipeline.build_pipeline().invoke({'image': original})
     assert repeated['classification']['cache_hit']
     assert repeated['quality']['passed'] is consistent
     assert repeated['classification']['review_required'] is not consistent
     assert repeated['execution_trace'][0]['status'] == 'cached'
-    assert len(calls) == 10  # Validation also runs on reused preparation.
+    assert len(calls) == 12  # Product validation is fresh; preprocessing is cached.
 
 
-def test_missing_detection_stops_before_sam_without_using_text_box(fal_stub, monkeypatch):
+def test_missing_detection_generates_without_sam_or_invented_box(fal_stub, monkeypatch):
     original, _, calls, _, _ = fal_stub
     stub = pipeline.call
     def missing(model, arguments):
@@ -504,19 +865,22 @@ def test_missing_detection_stops_before_sam_without_using_text_box(fal_stub, mon
         return stub(model, arguments)
     monkeypatch.setattr(pipeline, 'call', missing)
     events = []
-    with pytest.raises(RuntimeError, match='Could not locate'):
-        pipeline.build_pipeline(lambda **event: events.append(event)).invoke({'image': original})
-    assert [model for model, _ in calls] == [pipeline.CLASSIFICATION_MODEL, pipeline.LOCALIZATION_MODEL]
-    assert events[-1]['execution_trace'][-1]['id'] == 'locate'
-    assert events[-1]['execution_trace'][-1]['status'] == 'error'
+    state = pipeline.build_pipeline(lambda **event: events.append(event)).invoke({'image': original})
+    assert state['result_url'] and state['classification']['bbox'] is None
+    assert not any(model == pipeline.SAM_MODEL for model, _ in calls)
+    assert state['execution_trace'][1]['status'] == 'fallback'
+    assert state['execution_trace'][2]['status'] == 'skipped'
+    assert state['metrics']['reused_inferences'] == 0
+    assert not any(step['status'] == 'error' for step in events[-1]['execution_trace'])
 
 
-def test_missing_output_stops_before_next_paid_call(fal_stub, monkeypatch):
+def test_missing_sam_output_still_generates_from_photographs(fal_stub, monkeypatch):
     original, _, _, _, _ = fal_stub
     stub = pipeline.call
     monkeypatch.setattr(pipeline, 'call', lambda model, args: {} if model == pipeline.SAM_MODEL else stub(model, args))
-    with pytest.raises(RuntimeError, match='SAM did not return a mask'):
-        pipeline.build_pipeline().invoke({'image':original, 'garment':'sweater'})
+    state = pipeline.build_pipeline().invoke({'image':original, 'garment':'sweater'})
+    assert state['result_url'] and state['mask'] is None
+    assert state['recovery']['isolate']['error_type'] == 'RuntimeError'
 
 
 def test_biref_must_return_alpha(fal_stub):
@@ -566,27 +930,27 @@ def test_multiview_references_reach_analysis_and_generator_without_more_inferenc
               for color in ['purple', 'green', 'pink', 'blue'][:additional_count]]
     before = [image.tobytes() for image in extras]
     state = pipeline.build_pipeline().invoke({'image':original, 'additional_images':extras})
-    assert len(calls) == 7
+    assert len(calls) == 8
     assert state['analysis']['view_count'] == 1 + additional_count
     assert state['analysis']['input_size'] == [2560, 1280]
     generation = [arguments for model, arguments in calls if model == pipeline.RESTYLE_MODEL]
     assert len(generation) == 2
-    assert len(generation[0]['image_urls']) == 2 + additional_count
-    for index, url in enumerate(generation[0]['image_urls'][2:]):
+    assert len(generation[0]['image_urls']) == 1 + additional_count
+    for index, url in enumerate(generation[0]['image_urls'][1:]):
         assert images[url].tobytes() == before[index]
     assert generation[1]['image_urls'] == ['https://generated']
     assert 'MULTI-VIEW REFERENCE RULES' in state['generation_prompt']
-    assert f'INPUT: {2 + additional_count} reference images for ONE product.' in state['generation_prompt']
-    assert state['metrics']['inference_requests'] == 7
+    assert f'INPUT: {1 + additional_count} reference images for ONE product.' in state['generation_prompt']
+    assert state['metrics']['inference_requests'] == 8
     assert [image.tobytes() for image in extras] == before
     warm = pipeline.build_pipeline().invoke({'image':original, 'additional_images':extras})
     assert warm['analysis']['cache_hit']
-    assert warm['metrics']['inference_requests'] == 3
+    assert warm['metrics']['inference_requests'] == 4
     extras[0].paste('orange', (0, 0, 120, 180))
     changed = pipeline.build_pipeline().invoke({'image':original, 'additional_images':extras})
     assert not changed['analysis']['cache_hit']
-    assert changed['metrics']['inference_requests'] == 4
-    assert changed['classification']['cache_hit']
+    assert changed['metrics']['inference_requests'] == 6
+    assert not changed['classification']['cache_hit']
 
 
 def test_too_many_views_fail_before_any_inference(fal_stub):
@@ -615,10 +979,10 @@ def test_single_click_api(fal_stub, monkeypatch):
     assert job['generation_prompt']
     assert job['pressing_prompt']
     config = client.get('/api/config').json()
-    assert config['inference_requests_per_run'] == 7
-    assert config['inference_requests_cached_run'] == 3
-    assert config['inference_requests_by_kind']['garment'] == 7
-    assert config['inference_requests_by_kind']['accessory'] == 6
+    assert config['inference_requests_per_run'] == 8
+    assert config['inference_requests_cached_run'] == 4
+    assert config['inference_requests_by_kind']['garment'] == 8
+    assert config['inference_requests_by_kind']['accessory'] == 7
     assert job['classification']['label'] == 'red sweater'
     assert config['models']['pressing'] == config['models']['restyling']
     assert job['metrics']['total_seconds'] >= 0
@@ -670,7 +1034,7 @@ def test_multiview_single_click_api(fal_stub, monkeypatch):
         assert job['result_url'] and job['input_count'] == 2
         assert job['analysis']['view_count'] == 2
         assert any(image['id'] == 'original_2' for image in job['images'])
-        assert job['metrics']['inference_requests'] == 7
+        assert job['metrics']['inference_requests'] == 8
         assert client.get('/api/config').json()['inputs']['max_photos'] == 5
     finally:
         with server.lock:
@@ -752,7 +1116,7 @@ def test_corrected_reference_used_by_generator_and_quality(fal_stub, monkeypatch
         return {'passed': True, 'warnings': []}
     monkeypatch.setattr(pipeline, 'compare_product', compare)
     state = pipeline.build_pipeline().invoke({'image':original})
-    expected_detail = pipeline.prepare_analysis_image(corrected, mask, max(corrected.size))
+    expected_detail = Image.composite(corrected,Image.new('RGB',corrected.size,'white'),mask)
     assert images[calls[4][1]['image_urls'][0]].tobytes() == expected_detail.tobytes()
     assert seen[0].tobytes() == corrected.tobytes()
     assert 'second global' in calls[4][1]['prompt']
@@ -836,7 +1200,7 @@ def test_description_cleans_wrapped_response_and_limits_length():
     assert len(pipeline.extract_description({'output':'x' * 7000})) == 6000
 
 
-def test_description_failure_stops_before_generation(fal_stub, monkeypatch):
+def test_description_failure_does_not_block_generation(fal_stub, monkeypatch):
     original, _, calls, _, _ = fal_stub
     stub = pipeline.call
     def fail_description(model, arguments):
@@ -844,12 +1208,13 @@ def test_description_failure_stops_before_generation(fal_stub, monkeypatch):
             return {'output': ''}
         return stub(model, arguments)
     monkeypatch.setattr(pipeline, 'call', fail_description)
-    with pytest.raises(RuntimeError, match='empty garment description'):
-        pipeline.build_pipeline().invoke({'image':original})
-    assert not any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['result_url'] and state['analysis']['status'] == 'unavailable'
+    assert state['recovery']['describe']['error_type'] == 'RuntimeError'
+    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 2
 
 
-def test_analysis_cannot_be_skipped_by_former_optional_setting(fal_stub, monkeypatch):
+def test_analysis_timeout_preserves_generation_with_legacy_optional_setting(fal_stub, monkeypatch):
     original, _, calls, _, _ = fal_stub
     stub = pipeline.call
     def timed_out(model, arguments):
@@ -860,15 +1225,14 @@ def test_analysis_cannot_be_skipped_by_former_optional_setting(fal_stub, monkeyp
     monkeypatch.setattr(pipeline, 'call', timed_out)
     monkeypatch.setenv('FAL_ANALYSIS_REQUIRED', 'false')
     events = []
-    with pytest.raises(TimeoutError):
-        pipeline.build_pipeline(lambda **event: events.append(event)).invoke({'image': original})
-    assert len(calls) == 4
-    assert events[-1]['execution_trace'][-1]['id'] == 'describe'
-    assert events[-1]['execution_trace'][-1]['status'] == 'error'
-    assert not any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
+    state = pipeline.build_pipeline(lambda **event: events.append(event)).invoke({'image': original})
+    assert state['result_url'] and len(calls) == 8
+    assert state['execution_trace'][4]['id'] == 'describe'
+    assert state['execution_trace'][4]['status'] == 'fallback'
+    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 2
 
 
-def test_analysis_timeout_strict_mode_stops_generation(fal_stub, monkeypatch):
+def test_legacy_required_setting_cannot_make_helper_timeout_fatal(fal_stub, monkeypatch):
     original, _, calls, _, _ = fal_stub
     stub = pipeline.call
     def timed_out(model, arguments):
@@ -877,9 +1241,10 @@ def test_analysis_timeout_strict_mode_stops_generation(fal_stub, monkeypatch):
         return stub(model, arguments)
     monkeypatch.setattr(pipeline, 'call', timed_out)
     monkeypatch.setenv('FAL_ANALYSIS_REQUIRED', 'true')
-    with pytest.raises(TimeoutError):
-        pipeline.build_pipeline().invoke({'image':original})
-    assert not any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
+    state = pipeline.build_pipeline().invoke({'image':original})
+    assert state['result_url']
+    assert state['analysis']['status'] == 'unavailable'
+    assert any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
 
 
 def test_trace_records_configured_model_and_cache_without_another_inference(fal_stub, monkeypatch):
@@ -896,4 +1261,4 @@ def test_trace_records_configured_model_and_cache_without_another_inference(fal_
     assert state['execution_trace'][5]['model'] == 'fal-ai/nano-banana-2/edit'
     assert state['execution_trace'][6]['model'] == 'fal-ai/nano-banana-2/edit'
     assert sum(model == 'fal-ai/nano-banana-2/edit' for model, _ in calls) == 4  # two per garment
-    assert sum(model == pipeline.DESCRIPTION_MODEL for model, _ in calls) == before
+    assert sum(model == pipeline.DESCRIPTION_MODEL for model, _ in calls) == before + 1  # fresh output validation

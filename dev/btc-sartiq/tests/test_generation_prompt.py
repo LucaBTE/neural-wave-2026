@@ -38,6 +38,26 @@ def test_description_is_inserted_once_as_literal_data():
     assert 'No reliable global correction' in prompt
 
 
+def test_color_guesses_are_removed_from_auxiliary_caption_and_identity_only():
+    prompt = generation_prompt.build_generation_prompt(
+        'A dark blue knitted sweater with ribbed cuffs and the text "RED WHITE BLUE".',
+        {'status':'deferred', 'applied':False},
+        {'label':'dark blue sweater','category':'navy sweater','kind':'garment'})
+    assert 'dark blue' not in prompt and 'navy sweater' not in prompt
+    assert 'knitted sweater with ribbed cuffs' in prompt
+    assert '\\"RED WHITE BLUE\\"' in prompt  # artwork is never rewritten
+    assert 'photographs alone establish colors' in prompt
+
+
+@pytest.mark.parametrize('caption,expected', [
+    ('olive green pants with floral embroidery','pants with floral embroidery'),
+    ("white tee, printed 'Black Sabbath' in red", "tee, printed 'Black Sabbath' in"),
+    ('a cream ribbed sweater','a ribbed sweater'),
+    ('Women’s navy jacket with metal buttons','Women’s jacket with metal buttons')])
+def test_construction_observations_preserve_text_and_parts(caption, expected):
+    assert generation_prompt.construction_observations(caption) == expected
+
+
 @pytest.mark.parametrize('content', ['Empty', '{{LIGHTING_INSTRUCTIONS}}',
     '{{GARMENT_DESCRIPTION}} {{GARMENT_DESCRIPTION}} {{LIGHTING_INSTRUCTIONS}}',
     '{{GARMENT_DESCRIPTION}} {{LIGHTING_INSTRUCTIONS}} {{UNKNOWN}}'])
@@ -47,3 +67,16 @@ def test_invalid_template_fails_before_generation(tmp_path, monkeypatch, content
     monkeypatch.setattr(generation_prompt, 'TEMPLATE_PATH', template)
     with pytest.raises(ValueError, match='placeholder'):
         generation_prompt.build_generation_prompt('Shirt', {'status': 'neutral', 'applied': False})
+
+
+@pytest.mark.parametrize('extras',[0,1,4])
+def test_single_product_rule_never_requires_a_nonexistent_second_reference(extras):
+    prompt = generation_prompt.build_generation_prompt('Printed T-shirt',
+        {'status':'deferred','applied':False},additional_count=extras)
+    assert 'Generate exactly ONE physical garment instance' in prompt
+    assert 'second plain' in prompt
+    if extras:
+        assert f'INPUT: {1+extras} reference images for ONE product.' in prompt
+        assert 'Images 2 onward' in prompt
+    else:
+        assert 'Image 2' not in prompt

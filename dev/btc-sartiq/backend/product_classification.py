@@ -7,7 +7,7 @@ import math
 import re
 from pathlib import Path
 
-from garment_analysis import DEFAULT_MODEL, CACHE_TTL, CACHE_SIZE
+from garment_analysis import DEFAULT_MODEL, CACHE_TTL, CACHE_SIZE, prepare_multiview_analysis
 from request_reuse import ReuseCache
 
 CLASSIFICATION_MODEL = DEFAULT_MODEL
@@ -100,6 +100,13 @@ def parse_target(text):
               'confidence': confidence, 'review_required': review}
     if kind != model_kind:
         result.update(model_kind=model_kind, kind_source='physical_category')
+    if 'short english product name' in label.casefold() or 'distinguishing visual attributes' in label.casefold():
+        result.update(label=category, confidence=None, review_required=True, identity_supported=False)
+    description = target.get('description')
+    if (isinstance(description, str) and description.strip() and
+            not any(phrase in description.casefold() for phrase in
+                    ('short english product name', 'distinguishing visual attributes'))):
+        result['description'] = ' '.join(description.split())[:600]
     return result
 
 
@@ -124,6 +131,14 @@ def detection_box(response):
         if not (left < right and top < bottom and .001 <= (right-left)*(bottom-top) <= .95):
             continue
         if not (.15 <= cx <= .85 and .15 <= cy <= .85):
+            continue
+        # A distant shirt on a side rack must not pass merely because its box
+        # center barely clears the outer margin. Require actual overlap with the
+        # central product area; this still permits hollow/off-center eyewear and
+        # full-length garments, without forcing a foreground point into the mask.
+        central_overlap = (max(0., min(right, .70) - max(left, .30)) *
+                           max(0., min(bottom, .80) - max(top, .25)))
+        if central_overlap / ((right - left) * (bottom - top)) < .25:
             continue
         candidates.append(((cx-.5)**2 + (cy-.5)**2, box))
     if not candidates:
@@ -150,11 +165,20 @@ def locate_product(image, target, run_model):
             'localization_cache_status': reuse}
 
 
-def classify_product(image, run_model, extract_text):
+def classify_product(image, run_model, extract_text, additional_images=None):
     prompt = PROMPT_PATH.read_text(encoding='utf-8').strip()
     if not prompt:
         raise ValueError('Product classification prompt must not be empty')
+    extra = additional_images or []
+    if len(extra) > 4:
+        raise ValueError('Maximum 4 additional views')
     preview = image.convert('RGB')
+    if extra:
+        preview = prepare_multiview_analysis(preview, extra, 1280)
+        prompt += ('\nThese panels show ONE product. Main may be a cropped detail or label. '
+                   'Use the most complete view to identify the whole item; never classify '
+                   'a seam, shoulder, printed image or care label as the product. '
+                   'Describe only details supported by these photographs.')
     preview.thumbnail((1280, 1280))
     key = hashlib.sha256(CLASSIFICATION_MODEL.encode() + prompt.encode() +
                          str(preview.size).encode() + preview.tobytes()).hexdigest()
