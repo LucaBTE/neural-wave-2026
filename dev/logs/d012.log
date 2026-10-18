@@ -1,0 +1,46 @@
+d012_input_1 starting
+08:54:10 INFO [standalone] Identifying product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90}
+d012_input_1 classifying
+d012_input_1 classifying
+d012_input_1 classifying
+08:54:13 INFO [standalone] Identifying product | complete | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.363s | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90, 'label': 'jacket', 'category': 'jacket', 'kind': 'garment', 'confidence': 0.8, 'review_required': False, 'model_kind': 'other', 'kind_source': 'physical_category', 'description': 'Dark gray jacket with wide lapels, gold buttons, and dark trim at the collar and cuffs. Four horizontal straps across the chest.', 'cache_hit': False, 'cache_status': 'computed', 'model_invoked': True, 'pipeline_profile': 'faithful'}
+d012_input_1 classifying
+08:54:13 INFO [standalone] Locating product | running | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'max_side': 1280, 'timeout_seconds': 90}
+d012_input_1 locating
+d012_input_1 locating
+d012_input_1 locating
+08:54:16 INFO [standalone] Locating product | complete | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=2.919s | details={'max_side': 1280, 'timeout_seconds': 90, 'bbox': [0.16796875, 0.119140625, 0.796875, 0.759765625], 'cache_hit': False, 'model_invoked': True, 'cache_status': 'computed'}
+d012_input_1 locating
+08:54:16 INFO [standalone] Preparing | running | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d012_input_1 preparing
+d012_input_1 preparing
+d012_input_1 preparing
+08:54:21 INFO [standalone] Preparing | complete | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.457s | details={'strategy': 'classified_product', 'label': 'jacket', 'candidate_index': 0, 'candidate_count': 1, 'bbox': [104, 107, 484, 663], 'components_kept': 1, 'cache_status': 'computed', 'cache_hit': False, 'model_invoked': True, 'storage_uploads': 1}
+d012_input_1 preparing
+08:54:21 INFO [standalone] Preparing references | running | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d012_input_1 balancing_color
+d012_input_1 balancing_color
+08:54:22 INFO [standalone] Preparing references | complete | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=1.531s | details={'correction_applied': False, 'strength': 0.0, 'storage_uploads': 1, 'reused_uploads': 0}
+d012_input_1 balancing_color
+08:54:22 INFO [standalone] Creating photo | running | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'resolution': '2K'}
+d012_input_1 generating
+d012_input_1 generating
+08:54:45 INFO [standalone] Creating photo | complete | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=21.726s | details={'resolution': '2K', 'input_image_count': 1, 'reference_policy': 'context_crop', 'reference_crop': [71, 59, 515, 712]}
+d012_input_1 generating
+08:54:45 INFO [standalone] Checking product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'timeout_seconds': 30, 'max_side': 768}
+d012_input_1 checking_product
+d012_input_1 checking_product
+d012_input_1 checking_product
+08:54:49 INFO [standalone] Checking product | review_required | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.729s | details={'timeout_seconds': 30, 'max_side': 768, 'model': 'fal-ai/moondream3-preview/query', 'after_repair': False, 'verdict': 'uncertain'}
+d012_input_1 checking_product
+08:54:49 INFO [standalone] Refining | running | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d012_input_1 finishing
+d012_input_1 finishing
+08:54:54 INFO [standalone] Refining | complete | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.446s | details={'output_cleanup': {'applied': False, 'removed_boxes': []}}
+d012_input_1 finishing
+08:54:54 INFO [standalone] Final check | running | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d012_input_1 checking_quality
+d012_input_1 checking_quality
+08:54:57 INFO [standalone] Final check | complete | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.197s | details={'storage_uploads': 1, 'color_fidelity': {'method': 'studio_neutrality_and_foreground_material_anchor', 'calibrated': False, 'applied': True, 'backdrop': {'applied': False, 'reason': 'neutral_backdrop', 'gains_linear_rgb': [1.0, 1.0, 1.0], 'reference_tiles': 12}, 'material': {'applied': True, 'reason': 'bounded_foreground_material_drift', 'source_median_lab': [19.849, 0.516, -0.781], 'generated_median_lab': [21.802, 1.594, -1.578], 'palette_disagreement': 0.405, 'lightness_offset': -1.0254, 'chroma_offset': [0.0, 0.0], 'chroma_gain': 0.80285, 'source_exposure_center': 18.976, 'generated_exposure_center': 21.027}, 'dark_fallback': {'applied': False, 'reason': 'material_anchor_available'}, 'source_support': {'accepted': False, 'reason': 'not_needed'}, 'fallback_material': {'applied': False, 'reason': 'not_needed'}}}
+d012_input_1 checking_quality
+d012_input_1 review_required

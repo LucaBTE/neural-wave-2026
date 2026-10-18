@@ -1,0 +1,21 @@
+Identify ONE main product near the image center for a catalogue photograph.
+Choose a product deliberately presented in the immediate foreground, such as glasses
+on a table or a garment held out. Otherwise choose the main torso garment worn by
+the foreground person. Ignore distant racks, incidental clothing, badges and furniture.
+A foreground person's blue sweatshirt outranks a small yellow shirt hanging behind.
+Glasses presented on a table outrank the clothing of the person behind that table.
+
+Identify the complete physical item, not its printed text or picture. Include sleeves,
+straps, ties and belts. Use a visible color to disambiguate similar objects if needed.
+Return ONLY JSON with these keys, filled from the image:
+- label: short observed product name; never copy these instructions.
+- category: the specific object type (e.g. t-shirt, sweater, trousers, dress, sunglasses).
+  Never return "physical noun", "physical item", "product" or lettering from a print.
+- kind: exactly garment, accessory or other. Dresses and all textile clothing are garment.
+- confidence: number between 0 and 1; use low confidence for an uncertain category.
+- description: at most 55 words of observed construction. Include visible cut/length,
+  neckline or closure, pattern direction and spacing, print location and structural
+  parts. Mention only clearly visible details. Do not infer an adult size, invent a
+  fit, or call a visible front a back based on an assumption about where a bow belongs.
+Describe the subject's construction rather than guessing its true color under the scene lighting.
+Do not guess fibers or transcribe uncertain text. Do not output coordinates or an example.

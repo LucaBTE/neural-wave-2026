@@ -1,0 +1,2 @@
+usage: validate_studio.py [-h] [--views] photos [photos ...]
+validate_studio.py: error: the following arguments are required: photos

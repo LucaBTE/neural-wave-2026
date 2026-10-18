@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+fal-client>=1.0.3,<2
+pillow>=10
+python-dotenv>=1
+httpx>=0.27
+langgraph>=1.0,<2
+numpy>=1.26,<3
+opencv-python-headless>=4.10,<5

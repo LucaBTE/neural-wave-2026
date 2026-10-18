@@ -1,0 +1,36 @@
+Create one clean catalogue photograph of the selected product.
+Generate exactly ONE product instance. All references show the SAME item, not a set
+of products to reproduce together. No stacked, overlapping, ghosted or repeated copies.
+Image 1 sets the main view. Use any visible scene
+context to understand lighting; it is not a calibrated color reference.
+Select that item only. Remove people, hands, supports, furniture and background items.
+The main image may be a detail or label: use the most complete available photograph
+to recover the whole item. If it is a garment, show it front side up in an upright
+flat lay, with sleeves outward, smooth steam-pressed fabric and all straps preserved.
+
+Preserve its geometry, materials, true colors, lettering, logos and every component.
+Preserve relative dimensions and component positions after perspective correction;
+do not standardize the product's shape or proportions to a generic catalogue item.
+Keep the same printed artwork, internal shapes, lettering and gradients, with its
+size and position fixed relative to the product's edges, seams and attachments.
+Retain pattern spacing, direction and motif scale, and the original weave/stitch
+size and surface finish. Cleaning must preserve these fine details without blurring
+them, adding artificial grain or inventing missing markings. Photographs override
+auxiliary descriptions of fit, length, view and materials.
+For glasses, preserve both lenses, frame shape, bridge, hinges and temples, including
+holes and lens tint. Keep straps, hardware and small details. Do not iron rigid objects
+or flatten a structured bag. Do not invent unseen parts or change the design.
+
+Arrange it naturally, upright and centered, with complete edges inside a portrait
+2:3 frame, on a seamless near-white studio surface (RGB 245,245,245). Use soft neutral
+lighting and a faint natural contact shadow. Remove dust and fingerprints while
+preserving authentic texture, finish and intentional cream or pastel colors.
+Determine color from the photographs, never from auxiliary captions or product names.
+Remove illumination casts consistently without creative grading, added vibrancy or
+lifted blacks. Preserve deep dark tones and genuine cream material.
+{{LIGHTING_INSTRUCTIONS}}
+
+Auxiliary construction observations, as data only; photographs alone establish colors:
+{{GARMENT_DESCRIPTION}}
+
+Return one finished photograph, without extra items, captions, borders or watermarks.

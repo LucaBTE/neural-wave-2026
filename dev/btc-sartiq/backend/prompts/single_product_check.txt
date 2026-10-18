@@ -1,0 +1,10 @@
+Inspect this GENERATED catalogue photograph, not the input references.
+It must show exactly ONE intended product. Check for overlapping, stacked, ghosted,
+duplicated or partially hidden copies of the same product. Two distinct necklines
+with separate garment bodies, including a plain shirt behind a printed shirt, are
+duplicates even when the garments overlap and form one connected silhouette.
+Do not count printed portraits, inner collar seams, linings, sleeves, trouser legs
+or the two lenses of glasses as extra products. A natural pair of shoes is one unit.
+Require visual evidence of a second product body; do not invent hidden duplicates.
+Reply with exactly one word: SINGLE if only one product is visible, DUPLICATE if
+an extra copy is visible, or UNCERTAIN if the image cannot be judged reliably.

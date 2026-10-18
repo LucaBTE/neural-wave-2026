@@ -1,0 +1,46 @@
+d019_input_1 starting
+08:55:51 INFO [standalone] Identifying product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90}
+d019_input_1 classifying
+d019_input_1 classifying
+d019_input_1 classifying
+08:55:54 INFO [standalone] Identifying product | complete | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.553s | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90, 'label': 'skirt', 'category': 'skirt', 'kind': 'garment', 'confidence': 0.8, 'review_required': False, 'model_kind': 'other', 'kind_source': 'physical_category', 'description': 'A white pleated skirt with a fitted waist and flared lower portion, displayed on a mannequin. The pleats are visible along the front and sides. The skirt is full and reaches the floor.', 'cache_hit': False, 'cache_status': 'computed', 'model_invoked': True, 'pipeline_profile': 'faithful'}
+d019_input_1 classifying
+08:55:54 INFO [standalone] Locating product | running | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'max_side': 1280, 'timeout_seconds': 90}
+d019_input_1 locating
+d019_input_1 locating
+d019_input_1 locating
+08:55:58 INFO [standalone] Locating product | complete | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.144s | details={'max_side': 1280, 'timeout_seconds': 90, 'bbox': [0.26171875, 0.23046875, 0.79296875, 0.90234375], 'cache_hit': False, 'model_invoked': True, 'cache_status': 'computed'}
+d019_input_1 locating
+08:55:58 INFO [standalone] Preparing | running | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d019_input_1 preparing
+d019_input_1 preparing
+d019_input_1 preparing
+08:56:02 INFO [standalone] Preparing | complete | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.775s | details={'strategy': 'classified_product', 'label': 'skirt', 'candidate_index': 0, 'candidate_count': 1, 'bbox': [170, 193, 508, 745], 'components_kept': 1, 'cache_status': 'computed', 'cache_hit': False, 'model_invoked': True, 'storage_uploads': 1}
+d019_input_1 preparing
+08:56:02 INFO [standalone] Preparing references | running | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d019_input_1 balancing_color
+d019_input_1 balancing_color
+08:56:04 INFO [standalone] Preparing references | complete | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=1.674s | details={'correction_applied': False, 'strength': 0.0, 'storage_uploads': 1, 'reused_uploads': 0}
+d019_input_1 balancing_color
+08:56:04 INFO [standalone] Creating photo | running | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'resolution': '2K'}
+d019_input_1 generating
+d019_input_1 generating
+08:56:30 INFO [standalone] Creating photo | complete | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=26.195s | details={'resolution': '2K', 'input_image_count': 1, 'reference_policy': 'context_crop', 'reference_crop': [140, 146, 536, 791]}
+d019_input_1 generating
+08:56:30 INFO [standalone] Checking product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'timeout_seconds': 30, 'max_side': 768}
+d019_input_1 checking_product
+d019_input_1 checking_product
+d019_input_1 checking_product
+08:56:35 INFO [standalone] Checking product | review_required | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.515s | details={'timeout_seconds': 30, 'max_side': 768, 'model': 'fal-ai/moondream3-preview/query', 'after_repair': False, 'verdict': 'uncertain'}
+d019_input_1 checking_product
+08:56:35 INFO [standalone] Refining | running | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d019_input_1 finishing
+d019_input_1 finishing
+08:56:40 INFO [standalone] Refining | complete | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.924s | details={'output_cleanup': {'applied': False, 'removed_boxes': []}}
+d019_input_1 finishing
+08:56:40 INFO [standalone] Final check | running | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d019_input_1 checking_quality
+d019_input_1 checking_quality
+08:56:43 INFO [standalone] Final check | complete | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=2.989s | details={'storage_uploads': 1, 'color_fidelity': {'method': 'studio_neutrality_and_foreground_material_anchor', 'calibrated': False, 'applied': False, 'backdrop': {'applied': False, 'reason': 'neutral_backdrop', 'gains_linear_rgb': [1.0, 1.0, 1.0], 'reference_tiles': 12}, 'material': {'applied': False, 'reason': 'bright_material_illumination_ambiguous', 'source_median_lab': [79.633, 2.828, 16.359], 'generated_median_lab': [90.527, -0.188, 2.281]}, 'dark_fallback': {'applied': False, 'reason': 'material_anchor_available'}, 'source_support': {'accepted': False, 'reason': 'not_needed'}, 'fallback_material': {'applied': False, 'reason': 'not_needed'}}}
+d019_input_1 checking_quality
+d019_input_1 review_required
