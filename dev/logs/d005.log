@@ -1,0 +1,46 @@
+d005_input_1 starting
+08:53:06 INFO [standalone] Identifying product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90}
+d005_input_1 classifying
+d005_input_1 classifying
+d005_input_1 classifying
+08:53:10 INFO [standalone] Identifying product | complete | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.530s | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90, 'label': 'ZARA', 'category': 'Jacket', 'kind': 'garment', 'confidence': 0.8, 'review_required': False, 'model_kind': 'other', 'kind_source': 'physical_category', 'description': 'A black leather poncho with a high collar and long sleeves. The poncho is worn open, revealing the garment underneath. The material has a slightly reflective sheen. The poncho is displayed on a mannequin against a plain background.', 'cache_hit': False, 'cache_status': 'computed', 'model_invoked': True, 'pipeline_profile': 'faithful'}
+d005_input_1 classifying
+08:53:10 INFO [standalone] Locating product | running | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'max_side': 1280, 'timeout_seconds': 90}
+d005_input_1 locating
+d005_input_1 locating
+d005_input_1 locating
+08:53:13 INFO [standalone] Locating product | fallback | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.033s | details={'max_side': 1280, 'timeout_seconds': 90, 'bbox': None, 'cache_hit': False, 'model_invoked': True, 'cache_status': 'fallback', 'reason': 'source_reference_fallback', 'error_type': 'RuntimeError'}
+d005_input_1 locating
+08:53:13 INFO [standalone] Preparing | running | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d005_input_1 preparing
+d005_input_1 preparing
+d005_input_1 preparing
+08:53:13 INFO [standalone] Preparing | skipped | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=0.002s | details={'strategy': 'source_references', 'bbox': None, 'verified': False, 'cache_status': 'skipped', 'cache_hit': False, 'model_invoked': False, 'storage_uploads': 0, 'reason': 'source_reference_fallback', 'error_type': None}
+d005_input_1 preparing
+08:53:13 INFO [standalone] Preparing references | running | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d005_input_1 balancing_color
+d005_input_1 balancing_color
+08:53:18 INFO [standalone] Preparing references | complete | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.764s | details={'correction_applied': False, 'strength': 0.0, 'storage_uploads': 5, 'reused_uploads': 0}
+d005_input_1 balancing_color
+08:53:18 INFO [standalone] Creating photo | running | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'resolution': '2K'}
+d005_input_1 generating
+d005_input_1 generating
+08:53:48 INFO [standalone] Creating photo | complete | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=30.214s | details={'resolution': '2K', 'input_image_count': 5, 'reference_policy': 'source_photographs', 'reference_crop': None}
+d005_input_1 generating
+08:53:48 INFO [standalone] Checking product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'timeout_seconds': 30, 'max_side': 768}
+d005_input_1 checking_product
+d005_input_1 checking_product
+d005_input_1 checking_product
+08:53:52 INFO [standalone] Checking product | review_required | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.536s | details={'timeout_seconds': 30, 'max_side': 768, 'model': 'fal-ai/moondream3-preview/query', 'after_repair': False, 'verdict': 'uncertain'}
+d005_input_1 checking_product
+08:53:52 INFO [standalone] Refining | running | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d005_input_1 finishing
+d005_input_1 finishing
+08:53:57 INFO [standalone] Refining | complete | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.236s | details={'output_cleanup': {'applied': False, 'removed_boxes': []}}
+d005_input_1 finishing
+08:53:57 INFO [standalone] Final check | running | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d005_input_1 checking_quality
+d005_input_1 checking_quality
+08:54:00 INFO [standalone] Final check | complete | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.419s | details={'storage_uploads': 1, 'color_fidelity': {'method': 'studio_neutrality_and_foreground_material_anchor', 'calibrated': False, 'applied': True, 'backdrop': {'applied': False, 'reason': 'neutral_backdrop', 'gains_linear_rgb': [1.0, 1.0, 1.0], 'reference_tiles': 12}, 'material': {'applied': False, 'reason': 'missing_foreground_mask'}, 'dark_fallback': {'method': 'dark_material_exposure_guard', 'applied': False, 'calibrated': False, 'gain_linear_rgb': 1.0, 'reason': 'source_is_not_consistently_dark_neutral', 'reference': 'central_source_consensus'}, 'source_support': {'accepted': True, 'reason': 'spatial_material_consensus', 'method': 'central_material_consensus', 'is_segmentation': False, 'reference_tiles': 9}, 'fallback_material': {'applied': True, 'reason': 'bounded_foreground_material_drift', 'source_median_lab': [17.328, 0.672, 2.312], 'generated_median_lab': [18.42, 0.719, -0.594], 'palette_disagreement': 0.953, 'lightness_offset': -0.647, 'chroma_offset': [0.0, 0.0], 'chroma_gain': 1.2, 'source_exposure_center': 17.889, 'generated_exposure_center': 19.183}}}
+d005_input_1 checking_quality
+d005_input_1 review_required

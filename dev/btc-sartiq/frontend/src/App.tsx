@@ -12,8 +12,9 @@ type StepImage = {id: string; label: string; url: string};
 type TraceStep = {id: string; label: string; model: string | null; libraries: Record<string, string>; python: string;
   status: string; seconds: number | null; details: {cache_hit?: boolean; resolution?: string; model_invoked?: boolean; view_count?: number; input_image_count?: number}};
 type Job = {job_id: string; status: string; result_url?: string; error?: string; current_image?: StepImage; images?: StepImage[]; execution_trace?: TraceStep[];
-  classification?: {review_required?: boolean}};
-const phases = [
+  quality?: {single_product?: {status?: string}};
+  classification?: {review_required?: boolean}; stages?: {status:string; label:string}[]};
+const defaultPhases = [
   {status: 'classifying', label: 'Identifying product'},
   {status: 'locating', label: 'Locating product'},
   {status: 'preparing', label: 'Preparing'},
@@ -21,6 +22,7 @@ const phases = [
   {status: 'describing', label: 'Analyzing product'},
   {status: 'generating', label: 'Creating photo'},
   {status: 'pressing', label: 'Removing wrinkles'},
+  {status: 'checking_product', label: 'Checking product'},
   {status: 'finishing', label: 'Refining'},
   {status: 'checking_quality', label: 'Final check'},
 ];
@@ -55,7 +57,8 @@ export default function App() {
   const busy = processing || !!(job?.result_url && !outputVisible && reveal.phase !== 'error');
   const currentImage = job?.result_url ? {id: 'final', label: 'Final output', url: job.result_url} : job?.current_image;
   const canViewHistory = !!job && finished.includes(job.status) && !!job.images?.length;
-
+  const currentStep = job?.execution_trace?.[job.execution_trace.length - 1];
+  const phases = job?.stages || defaultPhases;
 
   const phaseIndex = phases.findIndex(phase => phase.status === job?.status);
   const progressLabel = job?.result_url ? (reveal.decoded ? 'Ready' : 'Loading finished photo') : submitting ? 'Uploading' : job?.status === 'queued' ? 'Queued' : phases[phaseIndex]?.label || 'Processing';
@@ -186,28 +189,12 @@ export default function App() {
             </div>)}
             {files.length < 5 && <button className="add-view" disabled={busy} onClick={() => pickPhotos(true)} aria-label="Add photos"><Plus size={20}/><span>Add</span></button>}</div>
           </div>}
-        </div>
-        <div className={'pipeline-connector ' + (busy ? 'pipeline-connector--active' : '')}>
-          <span className="pipeline-line" aria-hidden="true"/>
-          {job?.result_url ? <span className="pipeline-complete" aria-label="Generation complete"><Check size={20}/></span> :
-            <button className="primary pipeline-generate" disabled={busy} onClick={() => void generate()}>
-              {busy ? <><Loader2 className="spinner" size={16}/>Generating</> : <>Generate<ArrowRight size={16}/></>}
-            </button>}
-        </div>
-        <div className="output-workspace"><section className="result-panel" data-empty={!busy && !job?.result_url} aria-label="Current image" aria-busy={busy} data-active={mobilePanel === 'result'}>
-          <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{outputVisible && <span className="ready">Ready</span>}</div>
-          <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing ' : '') + (revealing ? 'is-revealing ' : '') + (outputVisible ? 'finished' : '')}>
-            {comparing && preview && job?.result_url ? <ComparisonView original={preview} result={job.result_url}/> : <>
-              <img ref={reveal.image} className={'result-final ' + (reveal.decoded ? 'result-final--visible' : '')} src={job?.result_url} alt="Final output" aria-hidden={!reveal.decoded}/>
-              <div ref={reveal.overlay} className="generation-overlay" data-phase={reveal.phase} aria-hidden={outputVisible} hidden={!busy && !job?.result_url && !currentImage}>
-                <img className="generation-source" src={preview} alt="Original product being transformed"/>
-                {busy && <><GenerationParticles source={preview}/><span className="generation-grain" aria-hidden="true"/><span className="live-caption" role="progressbar" aria-label="Image creation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent} aria-valuetext={`${progressPercent}% estimated progress, ${elapsed} seconds elapsed`}>
-                  <span className="generation-status-dot"/><span className="generation-stage">{progressPercent}% · {progressLabel}</span><span className="generation-elapsed" aria-label="Elapsed time">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
-                </span></>}
-              </div>
-              {!busy && !job?.result_url && !currentImage && <div className="empty"><Shirt size={40} strokeWidth={1.1}/><strong>A new perspective on your product.</strong><span>Your finished photo will appear here.</span><ol className="desktop-preparation"><li><b>01</b>Choose your references</li><li><b>02</b>Generate your photo</li><li><b>03</b>Compare and download</li></ol></div>}
-            </>}
-
+        </section>
+        <section aria-label="Current image" aria-busy={busy} data-active={mobilePanel === 'result'}>
+          <div className="caption"><span>{busy ? 'Live preview' : 'Result'}</span>{job?.result_url && <span className="ready">{job.quality?.single_product?.status === 'unverified' ? 'Review' : 'Ready'}</span>}</div>
+          <div className={'photo result ' + (currentImage?.id === 'cutout' ? 'transparent ' : '') + (busy ? 'processing' : '')}>
+            {currentImage ? <><img src={currentImage.url} alt={currentImage.label}/>{busy && <span className="live-caption"><Loader2 className="spinner" size={13}/>{currentImage.label}</span>}</> :
+              <div className="empty">{busy ? <><Loader2 className="spinner" size={28} strokeWidth={1.5}/><strong>Creating photo</strong></> : <><ImageIcon size={28} strokeWidth={1.3}/><span>Your studio photo</span></>}</div>}
           </div>
         </section>
       <div className="actions" hidden={busy}>
@@ -220,6 +207,26 @@ export default function App() {
       </div>
       </div></div>
       </div>
+      {!!job?.execution_trace?.length && <details className="execution-details">
+        <summary>Execution details{busy && currentStep && <span>{currentStep.model || Object.keys(currentStep.libraries).filter(name => name !== 'LangGraph').join(' · ')}</span>}</summary>
+        <div className="execution-list">
+          {job.execution_trace.map(step => <article key={step.id} className="execution-step">
+            <div className="execution-heading"><strong>{step.label}</strong><span className={'execution-status ' + step.status}>
+              {step.status.replace(/_/g, ' ')}{step.seconds !== null && ` · ${step.seconds.toFixed(2)}s`}
+            </span></div>
+            <div className="execution-model">{step.model || 'Local processing'}{step.details.resolution && ` · ${step.details.resolution}`}</div>
+            {step.details.view_count && step.details.view_count > 1 && <small>{step.details.view_count} product views</small>}
+            {step.details.input_image_count && step.details.input_image_count > 2 && <small>{step.details.input_image_count} reference images</small>}
+            <p>{Object.entries(step.libraries).map(([name, version]) => `${name} ${version}`).join(' · ')} · Python {step.python}</p>
+            {step.details.cache_hit && <small>Cached result · no model request</small>}
+          </article>)}
+        </div>
+      </details>}
+      {job?.result_url && job.status === 'review_required' && <p className="review-note">{job.quality?.single_product?.status === 'unverified'
+        ? 'Product count could not be verified. Check for duplicated or overlapping items.'
+        : job.classification?.review_required
+        ? 'Product identification is uncertain. Check that the result shows the intended item.'
+        : job.status === 'review_required' ? 'Check colors, prints and details before publishing.' : 'Check details before publishing.'}</p>}
       {canViewHistory && showHistory && <section id="image-history" className="image-history" aria-label="Intermediate images">
         {job?.images?.map((image, index) => <figure key={image.id}>
           <a className={'history-image ' + (image.id === 'cutout' ? 'transparent' : '')} href={image.url} target="_blank" rel="noreferrer" aria-label={'Open ' + image.label}>

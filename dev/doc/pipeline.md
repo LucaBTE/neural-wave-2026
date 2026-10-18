@@ -1,66 +1,30 @@
-# Pipeline di generazione fotografica
+# Pipeline 0.1
 
-La pipeline è orchestrata con **LangGraph** e viene eseguita interamente premendo **Generate photo**.
-
-## Più foto dello stesso prodotto
-
-È possibile caricare da **1 a 5 foto**, fino a **12 MB ciascuna e 48 MB totali**. La prima è la principale; un clic su una miniatura la rende principale. **Add** aggiunge altre viste e il tasto di rimozione elimina una foto. Tutto parte con il solito **Generate photo**.
-
-Classificazione, Detect, SAM e correzione cromatica usano la foto principale. La descrizione usa una sola richiesta Moondream (o il modello di analisi configurato) con una tavola generata localmente: prodotto principale isolato in un pannello grande e fino a quattro viste di contesto più piccole. A impostazioni predefinite la tavola misura 2560 × 1280 px; non si riduce la vista principale alle dimensioni di una singola miniatura. Il contenuto di tutte le viste entra nella chiave della cache di analisi.
-
-Nano Banana Pro riceve i due riferimenti isolati della foto principale più le foto aggiuntive normalizzate, fino a sei immagini nella **stessa richiesta**. Le foto aggiuntive conservano lo sfondo e non vengono segmentate né bilanciate separatamente, così sono utilizzabili anche come primi piani. Il prompt [multiview.txt](../btc-sartiq/backend/prompts/multiview.txt) le usa per spalline, attacchi, stampe e altri dettagli, imponendo un solo prodotto finale e impedendo di trasferire elementi del retro sul davanti. I colori principali restano quelli della vista principale corretta: le diverse luci non vengono mediate. Usare foto dello stesso oggetto; questa coerenza è richiesta al modello, non certificata da un controllo automatico tra viste.
-
-Il secondo passaggio di stiratura continua a ricevere soltanto l’immagine generata, per non reintrodurre posa e pieghe originali. Il numero di inferenze non aumenta: sette per i capi, sei per altri oggetti a cache fredda. Gli upload aumentano fino a uno per foto aggiuntiva e vengono riutilizzati dalla cache. Le foto originali aggiuntive e la tavola di analisi sono consultabili nei passaggi intermedi. `analysis.view_count`, `input_count` del job e `input_image_count` nella traccia di generazione registrano le viste usate.
-
-API compatibile con l’input singolo: multipart `file` per la foto principale e campi ripetuti `additional_files` per le altre. `/api/config` espone i limiti in `inputs`. Il supporto a più URL di riferimento è documentato nell’[API Nano Banana Pro](https://fal.ai/models/fal-ai/nano-banana-pro/edit/api); non viene cambiato il modello configurato.
-
-| Step | Cosa fa | Modello / strumento |
+| Step | Model or library | Purpose |
 |---|---|---|
-| **1. Preparazione dell’immagine** | Corregge l’orientamento della foto, converte in RGB e ridimensiona a un massimo di 2048 px. | **Python + Pillow**: elaborazione locale dell’immagine. |
-| **2. Classificazione del prodotto principale** | Identifica il prodotto presentato vicino al centro senza assumere che sia un vestito. Se il sottotipo è incerto, richiede una categoria più generica ma visibile, come “tessuto stampato”. Con nome utilizzabile prosegue anche sotto il 60% di confidenza, marcando il risultato da verificare; metadati mancanti o incerti non eliminano una proposta valida. Coordinate testuali ignorate. | **`fal-ai/moondream3-preview/query`**, senza ragionamento esteso. Cache per un’ora, inclusa la segnalazione d’incertezza; nessuna chiamata aggiuntiva. |
-| **3. Localizzazione nativa** | Individua il prodotto classificato usando il detector dedicato e restituisce riquadri normalizzati. Se ci sono più istanze, sceglie quella più vicina al centro. Risultati vuoti o invalidi interrompono il lavoro; cache separata per un’ora. | **`fal-ai/moondream3-preview/detect`**: localizzazione tramite output nativo `objects`, senza coordinate inventate nella risposta testuale. |
-| **4. Segmentazione guidata dalla classificazione** | Riceve nome e riquadro del detector, senza un punto positivo imposto che potrebbe cadere nel vuoto o sullo sfondo. Confronta fino a tre maschere e scarta quelle incompatibili con quella posizione. Per gli occhiali davanti a una persona, il maglione della persona non deve diventare il prodotto. Se nessuna maschera corrisponde, interrompe il lavoro. | **`fal-ai/sam-3/image`**: segmentazione con testo e box rilevato. **NumPy + OpenCV**: selezione della maschera. |
-| **5. Correzione dell’illuminazione** | Stima la dominante luminosa dallo sfondo e corregge i canali RGB. Prepara due viste del solo prodotto isolato su bianco. | **Python + NumPy + OpenCV**: algoritmo locale. Se l’evidenza è insufficiente o discordante, segnala l’incertezza. |
-| **6. Descrizione del prodotto** | Analizza solo il prodotto isolato con contesto della classificazione: ritaglio fino a 1280 px, JPEG qualità 95 senza sottocampionamento cromatico, massimo richiesto di 120 parole. Descrive vestibilità per i capi, geometria/materiali/componenti per altri prodotti. È obbligatoria, con cache per un’ora e limite di sicurezza di 90 secondi. | **`fal-ai/moondream3-preview/query`**, `reasoning=false`, `temperature=0`. I vecchi SA2VA restano selezionabili per la descrizione. |
-| **7. Generazione fotografica** | Riceve due viste isolate, classificazione e descrizione. Genera la foto da studio, chiedendo forma ideale, tessuto stirato e preservazione dei dettagli. Per accessori/altri oggetti usa istruzioni specifiche. | **`fal-ai/nano-banana-pro/edit`**, predefinito a **2K**. |
-| **8. Stiratura dedicata dei capi** | Secondo editing della sola foto generata, con il prompt precedente ripristinato: rimuove grinze e segni d’uso preservando colori, stampa, trama e costruzione. Non riceve l’originale spiegazzato. Per accessori e altri oggetti viene saltato. Se fallisce, il lavoro si interrompe. | **`fal-ai/nano-banana-pro/edit`**, predefinito a **2K**, come per la generazione. |
-| **9. Rimozione dello sfondo e composizione** | Usa la foto stirata per i capi e quella generata per altri prodotti. Rifinisce i bordi e compone su bianco, **1200 × 1800 px**. Adatta anche i soggetti piccoli all’inquadratura, senza deformarli, fino al 78% della larghezza e 72% dell’altezza. | **`fal-ai/birefnet/v2`**: trasparenza; **Pillow**: composizione e ridimensionamento locale. |
-| **10. Controllo qualità** | Confronta colori e uniformità del bianco, registrando metriche diagnostiche. | **Python + OpenCV**: non certifica identità semantica, assenza di pieghe o corrispondenza esatta delle stampe. |
+| Decode | Pillow / ImageCms | Apply EXIF orientation and convert embedded profiles to sRGB. |
+| Identify | `fal-ai/moondream3-preview/query` | Identify and describe the foreground product; extra views share one local board. |
+| Locate | `fal-ai/moondream3-preview/detect` | Locate that physical product rather than a print or background clothing. |
+| Segment | `fal-ai/sam-3/image` | Select the complete product and check agreement with localization. |
+| Prepare references | Pillow | Crop original RGB with 8% context when selection is supported; deduplicate photos. |
+| Generate | `google/nano-banana-2.1/edit`, 2K | Produce one frontal, pressed flat lay, preserving the item's colors, graphics and parts. |
+| Check | `fal-ai/moondream3-preview/query` | Check for duplicates. A detected duplicate gets one corrective edit and a mandatory recheck. |
+| Finish | `fal-ai/birefnet/v2`, Pillow | Obtain a diagnostic matte and pad generated RGB to 1200 × 1800, preserving pale details and shadows. |
+| Refine colors | OpenCV / NumPy | Apply the unchanged bounded studio-neutrality/material correction and conservative fragment cleanup. |
 
-## Prompt e configurazione
+LangGraph orchestrates these steps. Normal execution uses six model inferences;
+cached preprocessing reduces this to three. Duplicate correction adds at most two.
+There is no separate garment-analysis call or second steaming pass.
 
-Il prompt fotografico predefinito è in [backend/prompts/generation.txt](../btc-sartiq/backend/prompts/generation.txt). Descrizione visiva e valutazione della luce vengono inserite automaticamente.
+Unusable classification, localization or masks fall back to the original source
+photographs. A missing matte preserves the generated image. An inconclusive count
+check marks the result for review; a known duplicate must pass rechecking before
+being delivered. Generative editing can still change details or miss a duplicate.
 
-La classificazione usa [classification.txt](../btc-sartiq/backend/prompts/classification.txt); gli accessori e gli altri oggetti usano [product_generation.txt](../btc-sartiq/backend/prompts/product_generation.txt), senza istruzioni di stiratura. La selezione del prodotto è disponibile nel campo API `classification` e nell’anteprima **Selected product**, con riquadro disegnato solo per visualizzazione. I modelli non ricevono il riquadro disegnato.
+Editable prompts are in `dev/btc-sartiq/backend/prompts/`. The generation template
+keeps `{{LIGHTING_INSTRUCTIONS}}` and `{{GARMENT_DESCRIPTION}}` exactly once.
+Descriptions are auxiliary data; photographs establish product colors.
 
-La classificazione distingue `category` (tipo fisico, per esempio `T-shirt`) da `label` (nome descrittivo). Detect e SAM ricevono esclusivamente la categoria fisica: scritte come “Jennie Ruby”, loghi e ritratti stampati non devono diventare il bersaglio. Il prompt richiede il capo completo, comprese maniche e orlo. Una categoria fisica mancante o non valida interrompe il lavoro; maschere di piccoli frammenti non compatibili con il riquadro del prodotto vengono scartate. Le vecchie maschere in cache non vengono riutilizzate dopo questa modifica. Non aggiunge chiamate fal.
-
-Il campo `kind` non può contraddire una categoria fisica chiaramente riconosciuta: un `maxi dress` segue sempre il ramo capi, con prompt fotografico dedicato e secondo editing di stiratura, anche se il classificatore lo chiama `other`. Il controllo locale usa il nome fisico, mai le scritte in `label`; distingue per esempio `dress shoes` da un vestito e mantiene accessori e tessili non indossabili nei rispettivi rami. Categorie non riconosciute restano affidate al tipo proposto dal modello. Se corretto, il valore precedente viene registrato in `model_kind` e `kind_source=physical_category`. Non aggiunge inferenze. Descrizione e prompt richiedono anche la conservazione di cinture, lacci in vita, lunghezza del vestito e geometria dei motivi ripetuti.
-
-Un capo indossato dal soggetto principale in primo piano è un bersaglio valido. La priorità va a un prodotto distinto presentato nel primo piano (come occhiali sul tavolo); in assenza di quello, al capo sul busto della persona principale. Vestiti su grucce e stand sullo sfondo non hanno priorità solo perché esposti separatamente. La categoria può includere un colore visibile per distinguere il bersaglio (`light blue sweatshirt`); il rilevatore e SAM ricevono tale descrizione fisica, senza nomi di brand o scritte. Il riquadro rilevato deve sovrapporsi per almeno il 25% della propria area alla zona centrale x=30–70%, y=25–80%, altrimenti si interrompe la pipeline anziché generare un prodotto periferico. Nessuna chiamata fal aggiuntiva; queste verifiche geometriche non certificano da sole l’identità del capo.
-
-Una classificazione con confidenza bassa o incompleta viene approvata automaticamente quando Detect e SAM concordano sul prodotto: categoria fisica valida, IoU dei riquadri almeno 0,70 e maschera estesa almeno all’80% di entrambe le dimensioni del riquadro rilevato. La confidenza originale resta registrata; l’esito è in `classification.selection_validation`. La verifica è locale, senza chiamate fal aggiuntive, e si applica anche alla cache. La traccia **Identifying product** passa a **complete** (o **cached**) dopo la conferma. Questo controllo geometrico non certifica l’identità semantica o la fedeltà dell’immagine generata.
-
-Se la conferma manca, `classification.review_required=true` mantiene l’avviso sul prodotto identificato e forza l’output finale in stato `review_required`. I controlli separati su colori, illuminazione e sfondo rimangono attivi anche per prodotti approvati. Non si può garantire un’immagine finale in ogni caso: risposte prive di un nome utilizzabile, JSON illeggibile, errori API, mancata localizzazione o maschere non valide interrompono ancora il lavoro. Non vengono inventati prodotti o aggirate le verifiche geometriche.
-
-Le istruzioni antipiega rimangono nel prompt fotografico dei capi e nel prompt dedicato [pressing.txt](../btc-sartiq/backend/prompts/pressing.txt), ripristinato dalla versione precedente. Le istruzioni effettive sono consultabili nei campi API `generation_prompt` e `pressing_prompt`. Il secondo editing compare come **Removing wrinkles**, con anteprima **Steam-pressed photo**. L’assenza effettiva di pieghe va comunque verificata visivamente; il controllo OpenCV non la certifica.
-
-Entrambi i prompt richiedono anche la ricostruzione della posa: capo intero frontale, disposto piatto, asse verticale, spalle allineate e maniche bilanciate, ripreso dall’alto senza prospettiva obliqua. La disposizione originale si conserva solo se già conforme. Taglio, proporzioni reali, colori e grafiche restano vincoli di identità; posizione, inclinazione e deformazioni prospettiche no. Il secondo passaggio può correggere anche la posa globale, non soltanto le pieghe locali. La resa effettiva richiede verifica fotografica: non è certificata dai controlli geometrici o cromatici locali.
-
-Senza cache: **7 inferenze fal per i capi**, **6 per altri prodotti**. Sequenza: Moondream (classificazione) → Moondream Detect (localizzazione) → SAM → Moondream (descrizione) → Nano Banana Pro (generazione) → Nano Banana Pro (stiratura, solo capi) → BiRefNet. Le cache preparatorie restano attive: a cache calda sono **3 inferenze per i capi**, **2 per altri prodotti**. Le due chiamate Nano Banana Pro dei capi sono sempre nuove; non vengono ritentate automaticamente.
-
-Gli upload dei riferimenti identici sono riutilizzati per 10 minuti, senza cambiare i PNG: fino a 4 upload a freddo, soltanto l’output finale a cache calda. Gli input riutilizzabili su fal scadono dopo un’ora; gli output finali mantengono la politica precedente. Le anteprime restano nella memoria del job. La cache delle maschere ha un limite di 32 elementi e circa 64 MiB di pixel.
-
-SAM e BiRefNet richiedono l’output PNG incluso nella risposta (`sync_mode`), evitando download separati quando supportato dal provider. BiRefNet lavora mentre viene scaricata la foto generata; la composizione preserva RGB e alpha come prima. Le metriche API `inference_requests`, `reused_inferences` e `storage_uploads` contano le operazioni del job; la traccia distingue risultati calcolati, in cache o condivisi. Non sono un conteggio di tutti i poll HTTP. I guadagni di tempo reali restano da misurare su fal.
-
-La latenza di Moondream e la qualità delle descrizioni vanno ancora misurate su fal; code, avvii a freddo o disservizi possono comunque causare timeout. Il vecchio `FAL_ANALYSIS_REQUIRED=false` non consente più di saltare l’analisi. [API ufficiale Moondream](https://fal.ai/models/fal-ai/moondream3-preview/query/api).
-
-La correzione cromatica resta una stima: il recupero esatto dei colori richiede riferimenti neutri affidabili sotto la stessa luce del capo.
-
-L’intensità predefinita della correzione resta `1.05` (configurabile con `COLOR_CORRECTION_STRENGTH`), per limitare gli spostamenti indesiderati dei colori saturi. Picchi luminosi non annullano più automaticamente la correzione dell’intero capo: si adatta l’esposizione uniformemente, al massimo del 20%, e si riportano gli eventuali picchi residui entro gamma mantenendo i rapporti tra canali RGB lineari. `exposure_scale` e `highlight_fraction` registrano questi interventi. Restano i limiti su riferimenti insufficienti, luce mista e dominanti troppo forti; i tessuti crema non vengono forzati al bianco.
-
-Classificazione e descrizione richiedono di riconoscere spalline, lacci e relativi attacchi come parti del prodotto. Entrambi i prompt Nano Banana ne richiedono la conservazione, distinguendoli da grucce e fili da rimuovere: un capo con spalline non deve diventare senza spalline. Questo non può recuperare dettagli già assenti nella maschera di ingresso e non costituisce una verifica automatica della completezza dell’output.
-
-La classificazione e la localizzazione possono sbagliare: le verifiche geometriche riducono gli scambi tra prodotti, ma non certificano l’identità dell’oggetto. Test locali simulano un prodotto piccolo davanti a un maglione più grande; il caso fotografico reale va ancora validato su fal. [API SAM con box e punti](https://fal.ai/models/fal-ai/sam-3/image/api).
-
-La localizzazione usa l’[API nativa Detect](https://fal.ai/models/fal-ai/moondream3-preview/detect/api). Il riquadro in anteprima arriva dal detector; il generatore riceve soltanto riferimenti isolati. Restano possibili errori del modello: il caso fotografico reale non è stato rieseguito con crediti fal.
+The API contract, progress events, intermediate previews and model/library traces
+remain available to the existing frontend. `quality` contains internal diagnostics,
+not the official competition score.

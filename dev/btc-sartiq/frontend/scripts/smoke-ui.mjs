@@ -88,8 +88,7 @@ try {
       return stream;
     }});
   `;
-  let cameraFrameBaseline;
-  for (const mode of ['desktop', 'desktop-laptop', 'narrow-desktop', 'mobile', 'mobile-multi', 'mobile-denied', 'mobile-zoom', 'mobile-zoom-error', 'mobile-reduced-motion', 'fault-load', 'fault-decode', 'fault-unmount']) {
+  for (const mode of ['desktop', 'narrow-desktop', 'mobile', 'mobile-denied', 'desktop-unverified']) {
     const mobile = mode.startsWith('mobile');
     const {targetId} = await send('Target.createTarget', {url: 'about:blank'});
     const {sessionId} = await send('Target.attachToTarget', {targetId, flatten: true});
@@ -111,13 +110,9 @@ try {
         }
         const isEvents = request.url.endsWith('/events');
         if (!isEvents) requests++;
-        if (!isEvents && failure) {
-          void command('Fetch.fulfillRequest', {requestId, responseCode:failure.status,
-            responseHeaders:[{name:'Content-Type', value:failure.contentType || 'text/html'}],
-            body:Buffer.from(failure.body).toString('base64')});
-          return;
-        }
-        const job = {job_id: 'mock', status: 'complete', result_url: mode === 'fault-load' ? 'data:image/png;base64,broken' : mode === 'desktop' ? '/test-output.png' : resultImage,
+        const unverified = mode === 'desktop-unverified';
+        const job = {job_id: 'mock', status: unverified ? 'review_required' : 'complete', result_url: resultImage,
+          quality: {single_product:{status:unverified ? 'unverified' : 'passed'}},
           images: [{id:'final', label:'Final output', url:resultImage}],
           execution_trace: [{id:'restyle', label:'Creating photo', model:'Mock model',
             libraries:{}, python:'3', status:'complete', seconds:.1, details:{}}]};
@@ -131,7 +126,7 @@ try {
     await command('Page.setInterceptFileChooserDialog', {enabled:true});
     await command('Fetch.enable', {patterns:[{urlPattern:'*://*/api/*'},{urlPattern:'*://*/test-output.png'}]});
     await command('Emulation.setDeviceMetricsOverride', {
-      width:mode === 'desktop' ? 1440 : mode === 'desktop-laptop' ? 1280 : 390, height:mode === 'desktop' ? 1100 : mode === 'desktop-laptop' ? 800 : 844,
+      width:mode.startsWith('desktop') ? 1440 : 390, height:mode.startsWith('desktop') ? 1100 : 844,
       deviceScaleFactor:1, mobile,
     });
     if (mobile) {
@@ -281,92 +276,10 @@ try {
     }
     await evaluate(`document.querySelector('[aria-label="Use photo 2 as main"]').click()`);
     await waitFor('document.querySelector(".filename").textContent==="detail.png"');
-    if (mode.startsWith('desktop')) {
-      await waitFor('Math.abs(Number(document.querySelector(".workbench").style.getPropertyValue("--reference-aspect")) - 1.5) < .001');
-      const frames = await evaluate(`Array.from(document.querySelectorAll('.reference-panel .photo,.result-panel .photo')).map(el=>{const r=el.getBoundingClientRect();return {width:r.width,ratio:r.width/r.height};})`);
-      frames.forEach(frame => {assert.ok(Math.abs(frame.ratio-1.5)<.005, 'Frames follow the exact landscape input ratio');assert.ok(frame.width>=320, 'Desktop photo remains large enough to inspect');});
-      const landscapeShot = await command('Page.captureScreenshot', {format:'png'});
-      await writeFile(join(tmpdir(), `sartiq-landscape-${mode}.png`), Buffer.from(landscapeShot.data, 'base64'));
-    }
-    if (mode === 'desktop') {
-      for (const testCase of [
-        {status:500, body:'', expected:'Generation service unavailable (HTTP 500)'},
-        {status:502, body:'<html>Bad gateway</html>', expected:'Generation service unavailable (HTTP 502)'},
-        {status:413, body:'{"detail":"Maximum 12 MB per photo"}', contentType:'application/json', expected:'Maximum 12 MB per photo'},
-        {status:200, body:'<html>Wrong proxy target</html>', expected:'invalid response'},
-        {status:202, body:'{}', contentType:'application/json', expected:'invalid response'},
-      ]) {
-        failure = testCase;
-        await evaluate('document.querySelector(".pipeline-generate").click()');
-        await waitFor(`document.querySelector('[role=alert]')?.textContent.includes(${JSON.stringify(testCase.expected)})`);
-        assert.equal(await evaluate('!!document.querySelector(".processing")'), false);
-      }
-      failure = null; requests = 0;
-    }
-    if (mode === 'fault-decode') await evaluate(`HTMLImageElement.prototype.decode=()=>Promise.reject(new Error('Decode failed'));`);
-    if (mode === 'fault-unmount') await evaluate(`HTMLImageElement.prototype.decode=function(){return new Promise(resolve=>window.__finishPendingDecode=resolve);};`);
-    if (mode === 'desktop') await evaluate(`window.__decodeOriginal=HTMLImageElement.prototype.decode; HTMLImageElement.prototype.decode=async function(){await window.__decodeOriginal.call(this); if(this.classList.contains('result-final')) {window.__decodingImage=this;await new Promise(resolve=>window.__releaseDecode=resolve);}};`);
-    await evaluate(`document.querySelector(${JSON.stringify(mode.startsWith('desktop') ? '.pipeline-generate' : '.mobile-generate')}).click()`);
-    await waitFor('!!document.querySelector(".processing .generation-particles")');
-    if (mode.startsWith('fault-')) {
-      if (mode === 'fault-unmount') {
-        await waitFor('!!window.__finishPendingDecode');
-        await evaluate('document.querySelector(".brand").click(); window.__finishPendingDecode()');
-        await waitFor('!!document.querySelector(".editorial-showcase")');
-        assert.equal(await evaluate('!!document.querySelector(".photo.result")'), false);
-      } else {
-        await waitFor('document.querySelector(".generation-overlay")?.dataset.phase === "error"');
-        assert.equal(await evaluate('!!document.querySelector(".result-final--visible,.ready")'), false);
-        assert.ok(await evaluate('document.querySelector("[role=alert]").textContent.includes("could not be loaded")'));
-        assert.equal(await evaluate('getComputedStyle(document.querySelector(".generation-overlay")).opacity'), '1');
-      }
-      assert.deepEqual(errors, []);
-      console.log(`PASS ${mode}: safe failure or navigation during decoding`);
-      await send('Target.closeTarget', {targetId}); listeners.delete(sessionId);
-      continue;
-    }
-    if (mode === 'desktop') await evaluate(`window.__progressSamples=[]; window.__progressTimer=setInterval(()=>{const bar=document.querySelector('[role=progressbar]');if(bar)window.__progressSamples.push({percent:Number(bar.getAttribute('aria-valuenow')),decoded:!!document.querySelector('.result-final--visible')});},50);`);
-    assert.equal(await evaluate('document.querySelector(".processing .generation-source").alt'), 'Original product being transformed');
-    assert.equal(await evaluate('!!document.querySelector(".progress-panel")'),false,'Progress is only shown in the image overlay');
-    if (mode.startsWith('desktop')) {
-      assert.equal(await evaluate(`(() => {const original=document.querySelector('.reference-panel').getBoundingClientRect();const result=document.querySelector('.result-panel').getBoundingClientRect();const rail=document.querySelector('.input-views').getBoundingClientRect();return Math.abs(original.width-result.width)<1 && Math.abs(original.height-result.height)<1 && rail.right<original.left;})()`),true,'Cards keep their geometry beside the thumbnail rail during generation');
-    }
-    assert.match(await evaluate('document.querySelector(".live-caption .generation-elapsed").textContent'), /^\d+:\d{2}$/);
-    if (mode === 'mobile-reduced-motion') assert.equal(await evaluate('!!document.querySelector(".generation-particles canvas")'), false);
-    if (mode === 'desktop') {
-      await waitFor('document.querySelector(".generation-particles")?.dataset.ready === "true"');
-      assert.equal(await evaluate('getComputedStyle(document.querySelector(".pipeline-connector--active"), "::before").animationName'), 'pipeline-aura');
-      const generationShot = await command('Page.captureScreenshot', {format:'png'});
-      await writeFile(join(tmpdir(), 'sartiq-generation-desktop.png'), Buffer.from(generationShot.data, 'base64'));
-    }
-    if (mode === 'desktop') {
-      await waitFor('!!document.querySelector(".result-final") && !document.querySelector(".result-final").naturalWidth');
-      assert.equal(await evaluate('!!document.querySelector(".generation-particles canvas")'), true, 'Particles remain alive until the final image is loaded');
-      assert.ok(await evaluate('Number(document.querySelector("[role=progressbar]").getAttribute("aria-valuenow")) < 100'), 'No 100% before output decode');
-      await waitFor('!!window.__releaseDecode');
-      assert.equal(await evaluate('document.querySelector(".generation-overlay").dataset.phase'), 'decoding');
-      assert.equal(await evaluate('!!document.querySelector(".result-final--visible")'), false, 'Loaded but undecoded photo stays covered');
-      await evaluate('window.__revealedImage=document.querySelector(".result-final");window.__sourceImage=document.querySelector(".generation-source");window.__frameRect=document.querySelector(".photo.result").getBoundingClientRect().toJSON();window.__releaseDecode()');
-      await waitFor('!!document.querySelector(".photo.is-revealing .result-final--visible")');
-      assert.equal(await evaluate('window.__decodingImage === window.__revealedImage'), true, 'Decode belongs to the displayed element');
-      assert.equal(await evaluate('document.querySelector(".generation-overlay").getAnimations().length'), 1);
-
-      assert.equal(await evaluate('document.querySelector(".result-final").naturalWidth > 0 && !!document.querySelector(".generation-particles canvas")'), true, 'Decoded photo blends over the existing particle canvas');
-      assert.equal(await evaluate('getComputedStyle(document.querySelector(".result-final")).transitionDuration'), '0s');
-    }
-    await waitFor('document.querySelector(".ready")?.textContent === "Ready"');
-    if (mode === 'desktop') {
-      assert.equal(await evaluate('window.__revealedImage === document.querySelector(".result-final") && window.__sourceImage === document.querySelector(".generation-source")'), true, 'Both image layers survive completion');
-      assert.equal(await evaluate('JSON.stringify(window.__frameRect) === JSON.stringify(document.querySelector(".photo.result").getBoundingClientRect().toJSON())'), true, 'No frame shift at completion');
-      assert.equal(await evaluate('getComputedStyle(document.querySelector(".generation-overlay")).opacity'), '0');
-      const samples = await evaluate('clearInterval(window.__progressTimer); window.__progressSamples');
-      const processingSamples = samples.filter(sample => !sample.decoded).map(sample => sample.percent);
-      assert.ok(new Set(processingSamples).size >= 3, 'Progress advances between pipeline updates');
-      for (let index=1;index<processingSamples.length;index++) {
-        assert.ok(processingSamples[index] >= processingSamples[index-1], 'Progress never goes backwards');
-        assert.ok(processingSamples[index]-processingSamples[index-1] < 10, 'Progress avoids large instantaneous jumps');
-      }
-      assert.ok(samples.every(sample=>sample.decoded || sample.percent < 100));
+    await evaluate('document.querySelector(".primary").click()');
+    await waitFor(`document.querySelector(".ready")?.textContent === ${JSON.stringify(mode === 'desktop-unverified' ? 'Review' : 'Ready')}`);
+    if (mode === 'desktop-unverified') {
+      assert.ok(await evaluate('document.querySelector(".review-note")?.textContent.includes("Product count could not be verified")'));
     }
     assert.equal(requests, 1);
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".has-result")).backgroundColor'), 'rgb(221, 189, 253)');

@@ -7,7 +7,7 @@ import math
 import re
 from pathlib import Path
 
-from garment_analysis import DEFAULT_MODEL, CACHE_TTL, CACHE_SIZE
+from vision import DEFAULT_MODEL, CACHE_TTL, CACHE_SIZE, prepare_multiview_analysis
 from request_reuse import ReuseCache
 
 CLASSIFICATION_MODEL = DEFAULT_MODEL
@@ -74,6 +74,16 @@ def parse_target(text):
         if not isinstance(category, str):
             raise ValueError('Missing physical product category')
         category = ' '.join(category.split())
+        # Some vision responses echo the schema's type description verbatim.
+        # A detector queried with "physical noun" can return a print or nothing.
+        # Recover only an explicit product noun, never OCR/brand names.
+        if category.casefold() in ('physical noun', 'physical item', 'physical product',
+                                   'product', 'object', 'item', 'garment', 'clothing', 'apparel'):
+            recovered = concrete_category(label, target.get('description'))
+            if recovered:
+                category = recovered
+            elif category.casefold() not in ('garment', 'clothing', 'apparel'):
+                raise ValueError('Unresolved category placeholder')
         if (not 1 <= len(category) <= 60 or not any(c.isalpha() for c in category) or
                 any(not c.isprintable() for c in category) or
                 category.casefold() in ('unknown', 'none', 'null', 'other', 'print',
@@ -100,7 +110,39 @@ def parse_target(text):
               'confidence': confidence, 'review_required': review}
     if kind != model_kind:
         result.update(model_kind=model_kind, kind_source='physical_category')
+    if 'short english product name' in label.casefold() or 'distinguishing visual attributes' in label.casefold():
+        result.update(label=category, confidence=None, review_required=True, identity_supported=False)
+    description = target.get('description')
+    if (isinstance(description, str) and description.strip() and
+            not any(phrase in description.casefold() for phrase in
+                    ('short english product name', 'distinguishing visual attributes'))):
+        result['description'] = ' '.join(description.split())[:600]
     return result
+
+
+def concrete_category(label, description=None):
+    """Recover the subject noun from a label or the subject of its caption.
+
+    Explicit non-generic categories are never overridden. Stop before descriptions
+    of artwork, parts or the surrounding scene, which may name other products.
+    """
+    for text in (label, description):
+        if not isinstance(text, str):
+            continue
+        subject = re.split(r'\b(?:with|featuring|depicting|showing|printed|on|behind|beside)\b',
+                           text.casefold(), maxsplit=1)[0].strip(' ,.')
+        if re.search(r'\b(?:print|image|picture|portrait|logo|graphic|text)\b', subject):
+            continue
+        words = subject.split()
+        # Last noun head handles compounds such as "dress shoes" and "T-shirt bag".
+        for end in range(len(words), 0, -1):
+            phrase = ' '.join(words[:end]).strip(' ,.')
+            if physical_category_kind(phrase) is not None:
+                noun = words[end - 1].strip(' ,.')
+                if noun == 'shirt' and end > 1 and words[end - 2] == 't':
+                    noun = 't-shirt'
+                return noun
+    return None
 
 
 def detection_box(response):
@@ -158,11 +200,20 @@ def locate_product(image, target, run_model):
             'localization_cache_status': reuse}
 
 
-def classify_product(image, run_model, extract_text):
+def classify_product(image, run_model, extract_text, additional_images=None):
     prompt = PROMPT_PATH.read_text(encoding='utf-8').strip()
     if not prompt:
         raise ValueError('Product classification prompt must not be empty')
+    extra = additional_images or []
+    if len(extra) > 4:
+        raise ValueError('Maximum 4 additional views')
     preview = image.convert('RGB')
+    if extra:
+        preview = prepare_multiview_analysis(preview, extra, 1280)
+        prompt += ('\nThese panels show ONE product. Main may be a cropped detail or label. '
+                   'Use the most complete view to identify the whole item; never classify '
+                   'a seam, shoulder, printed image or care label as the product. '
+                   'Describe only details supported by these photographs.')
     preview.thumbnail((1280, 1280))
     key = hashlib.sha256(CLASSIFICATION_MODEL.encode() + prompt.encode() +
                          str(preview.size).encode() + preview.tobytes()).hexdigest()
