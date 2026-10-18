@@ -38,7 +38,17 @@ export default defineConfig({
   plugins: [react(), mobileInstructions()],
   server: {
     host: '0.0.0.0',
-    proxy: {'/api': 'http://127.0.0.1:8000'},
-    allowedHosts: ['attachments-dog-aspects-incidents.trycloudflare.com'],
+    proxy: {'/api': {
+      target: 'http://127.0.0.1:8000',
+      configure(proxy) {
+        proxy.on('error', (_error, _request, response) => {
+          if ('writeHead' in response && !response.headersSent) {
+            response.writeHead(502, {'Content-Type': 'application/json'});
+            response.end(JSON.stringify({detail: 'Generation service unavailable. Start the backend on port 8000 and try again.'}));
+          }
+        });
+      },
+    }},
+    allowedHosts: ['.trycloudflare.com'],
   },
 });
