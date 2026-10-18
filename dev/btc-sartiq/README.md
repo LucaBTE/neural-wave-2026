@@ -1,73 +1,124 @@
-# Sartiq Catalogue Studio — pipeline 0.1
+# Sartiq Catalogue Studio
 
-One studio photo from 1–5 photographs of the same product. The pipeline uses
-LangGraph, one Nano Banana 2.1 edit at 2K, the original RGB context crop and bounded
-local color correction. Models, prompts and active image processing match 0.1.
+Turns 1–5 photos of one product into a 1200×1800 catalogue photo on a white background.
+Every model runs on [fal.ai](https://fal.ai), so each run costs fal credits.
 
-## Backend
+## Setup
 
-From the repository root:
+Backend (Python 3.10+):
 
 ```bash
-cd dev/btc-sartiq/backend
-python3 -m venv .venv                    # first setup only
+cd backend
+python -m venv .venv
 .venv/bin/pip install -r requirements.txt
-# First setup: copy .env.example to .env and set FAL_API_KEY or FAL_KEY.
-.venv/bin/python -m uvicorn server:app --reload --port 8000
+cp -n .env.example .env   # then set FAL_API_KEY (-n keeps an existing .env)
 ```
 
-Keep your existing `.env`. Credentials stay on the backend.
-
-## Frontend
-
-In another terminal, from the repository root:
+Frontend (only for the web app):
 
 ```bash
-cd dev/btc-sartiq/frontend
+cd frontend
 npm install
+```
+
+## Run from the CLI
+
+From `dev/btc-sartiq/`:
+
+```bash
+# one photo
+backend/.venv/bin/python scripts/validate_studio.py path/to/photo.jpg
+
+# several photos of the SAME product (first one is the main view, max 5)
+backend/.venv/bin/python scripts/validate_studio.py --views main.jpg side.jpg detail.jpg
+```
+
+Without `--views`, each photo is processed as a separate product.
+
+Results go to `validation/<folder>_<name>_studio.png`. The same folder gets the prompt, quality report, timings, trace and classification as `.txt`/`.json` files.
+
+To generate the whole competition submission, see [`../doc/how-to-submit.md`](../doc/how-to-submit.md).
+
+## Run the web app (FastAPI + frontend)
+
+Two terminals:
+
+```bash
+# 1. backend, on :8000
+cd backend
+.venv/bin/uvicorn server:app --reload --port 8000
+
+# 2. frontend, on :5173 (proxies /api to :8000)
+cd frontend
 npm run dev
 ```
 
-Use the local or mobile URL printed by Vite. The frontend proxies `/api` to the
-backend; there is no separate mobile server.
+Open http://127.0.0.1:5173, upload the photos and press **Generate photo**.
+The page shows live progress, and **View all steps** opens the intermediate images.
 
-## Run one product
+## Configuration
 
-From the repository root:
+`backend/.env` (restart the backend after changing it):
 
-```bash
-dev/btc-sartiq/backend/.venv/bin/python -B dev/btc-sartiq/scripts/validate_studio.py \
-  --views /path/to/product/input_1.jpg /path/to/product/input_2.jpg
+| Variable | Default | Notes |
+|---|---|---|
+| `FAL_API_KEY` (or `FAL_KEY`) | — | required |
+| `FAL_IMAGE_MODEL` | `fal-ai/nano-banana-pro/edit` | or `fal-ai/nano-banana-2/edit` |
+| `FAL_IMAGE_RESOLUTION` | `2K` | `1K`, `2K`, `4K` |
+| `FAL_ANALYSIS_MODEL` | `fal-ai/moondream3-preview/query` | |
+| `FAL_ANALYSIS_TIMEOUT` | `90` | seconds, 15–300 |
+| `FAL_ANALYSIS_MAX_SIDE` | `1280` | px, 768–2048 |
+| `COLOR_CORRECTION_STRENGTH` | `1.05` | 0.5–1.5 |
+
+The prompts are plain text files in `backend/prompts/`. They are re-read for every job, so editing them needs no restart.
+`generation.txt` must contain `{{LIGHTING_INSTRUCTIONS}}` and `{{GARMENT_DESCRIPTION}}` exactly once each.
+
+## How it works
+
+A LangGraph pipeline in `backend/pipeline.py`:
+
+```
+classify → locate → isolate → balance → describe → restyle → press → finish → verify
 ```
 
-The first photograph is the main view. Results, prompt, model trace and quality
-information are saved in `dev/btc-sartiq/validation/`.
+| Step | What it does | Tool |
+|---|---|---|
+| classify | identifies the main product (garment, accessory, other) | Moondream 3 Query |
+| locate | finds its bounding box | Moondream 3 Detect |
+| isolate | segments the product | SAM 3 + OpenCV |
+| balance | white-balances from the background | local (`color.py`) |
+| describe | writes a short visual description | Moondream 3 Query |
+| restyle | generates the catalogue photo | Nano Banana Pro Edit |
+| press | removes wrinkles (garments only) | Nano Banana Pro Edit |
+| finish | cuts out the product and places it on white | BiRefNet v2 + Pillow |
+| verify | checks colour drift and the background | local (`quality.py`) |
 
-- [Pipeline and model table](../doc/pipeline.md)
-- [Generate a submission](../doc/how-to-submit.md)
-- [Official scoring and baseline comparison](../doc/how-to-score.md)
+A garment needs 7 fal calls, any other product 6. Rerunning the same photo uses fewer, because classification, detection, description and segmentation are cached in memory for one hour.
+Any error stops the job, and nothing is retried automatically.
 
-## Essential tests
+Step-by-step details: [`../doc/pipeline.md`](../doc/pipeline.md).
+
+## API
+
+- `POST /api/studio`: multipart `file` (main photo) plus up to 4 `additional_files`. Accepts JPG/PNG/WebP, max 12 MB each and 48 MB in total. Returns `job_id`.
+- `GET /api/jobs/{job_id}`: status, result URL, quality report, prompts, trace.
+- `GET /api/jobs/{job_id}/events`: the same data as an SSE stream (used by the frontend).
+- `GET /api/config`: models, limits, output size.
+
+A job ends as `complete`, `review_required` (output produced, but needs a visual check) or `error`.
+
+## Tests
+
+The tests use simulated fal responses, so they need no API key and cost nothing.
 
 ```bash
-cd dev/btc-sartiq
-backend/.venv/bin/pip install -r backend/requirements-dev.txt
-backend/.venv/bin/python -B -m pytest -q tests
+backend/.venv/bin/python -m pytest -q tests
+cd frontend && npm run build
 ```
 
-Tests mock remote models. They cover the current graph, source selection, colors,
-multiple views, duplicate rejection, API compatibility and version restoration.
+## Limits
 
-## Version 0.1
-
-The original source archive and SHA-256 manifest are in `dev/versions/0.1/`.
-From the repository root:
-
-```bash
-python3 dev/pipeline_version.py verify 0.1
-python3 dev/pipeline_version.py restore 0.1
-```
-
-Restore backs up replaced files inside `dev` and preserves `.env`. Restart the
-backend afterwards. The archived source includes the older compatibility code;
-the active codebase removes those unused branches without changing the 0.1 path.
+- Generation can alter lettering, prints and texture. The quality check only looks at colour and the background, so inspect results by eye.
+- White balance is a heuristic. Mixed or strongly coloured light marks the result `review_required`.
+- Jobs live in memory and are lost when the backend restarts. There is no authentication or quota.
+- `reference/` and `backend/reused/` contain code from the original project, with its attribution obligations.
