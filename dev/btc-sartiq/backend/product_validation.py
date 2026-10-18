@@ -3,7 +3,7 @@ import base64
 import io
 from pathlib import Path
 
-from garment_analysis import DEFAULT_MODEL
+from vision import DEFAULT_MODEL
 
 VALIDATION_MODEL = DEFAULT_MODEL
 CHECK_PREFIX = 'SINGLE PRODUCT CHECK\n'

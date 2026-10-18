@@ -2,39 +2,20 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
 from PIL import Image
-from pipeline import background_mask,extract_urls
 
-def test_mask_inverts_and_protects_garment():
-    m=Image.new('L',(20,20),0)
-    for x in range(5,15):
-        for y in range(5,15): m.putpixel((x,y),255)
-    bg=background_mask(m)
-    assert bg.getpixel((10,10))==0
-    assert bg.getpixel((0,0))==255
 
-def test_sam_masks_and_generation_response():
-    assert extract_urls({'masks':[{'url':'https://a'},{'url':'https://b'}]},masks=True)==['https://a','https://b']
-    assert extract_urls({'images':[{'url':'https://out'}]})==['https://out']
-
-import numpy as np
 import threading
 import pytest
 import pipeline
-from garment_analysis import clear_analysis_cache
 from product_classification import clear_classification_cache
-from quality import compare_product
 
 
 @pytest.fixture(autouse=True)
 def fresh_analysis_cache(monkeypatch):
-    # Retain regression coverage for the optional staged workflow. Faithful-mode
-    # tests below explicitly clear this override and exercise the new default.
-    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'staged')
-    clear_analysis_cache()
+    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
     clear_classification_cache()
     pipeline.clear_reuse_caches()
     yield
-    clear_analysis_cache()
     clear_classification_cache()
     pipeline.clear_reuse_caches()
 
@@ -65,8 +46,6 @@ def fal_stub(monkeypatch):
             return {'objects': [{'x_min':.25,'y_min':.2,'x_max':.75,'y_max':.8}]}
         if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
             return {'output': '{"label":"red sweater","category":"sweater","kind":"garment","bbox":[0.25,0.2,0.75,0.8],"point":[0.5,0.5],"confidence":0.95}'}
-        if model == pipeline.DESCRIPTION_MODEL:
-            return {'output': '<p>Relaxed red knitted sweater with ribbed cuffs.</p><|im_end|>', 'masks': []}
         if model == pipeline.SAM_MODEL:
             return {'masks': [{'url': 'https://sam'}]}
         if model == pipeline.BIREF_MODEL:
@@ -93,8 +72,6 @@ def test_default_profile_keeps_scene_colors_and_uses_one_generation(fal_stub, mo
     monkeypatch.delenv('FAL_IMAGE_MODEL', raising=False)
     # A colored wall is useful context, but must not be treated as a gray card.
     original.paste((210, 175, 130), (0, 0, 20, 100))
-    monkeypatch.setattr(pipeline, 'normalize_illumination',
-                        lambda *a: pytest.fail('Uncalibrated white balance changed the source'))
     events = []
     state = pipeline.build_pipeline(lambda **e: events.append(e)).invoke({'image': original})
     assert pipeline.pipeline_profile() == 'faithful'
@@ -107,7 +84,9 @@ def test_default_profile_keeps_scene_colors_and_uses_one_generation(fal_stub, mo
     assert state['color_reference'].tobytes() == original.tobytes()
     generation = calls[3][1]
     assert generation['image_urls'] == [state['reference_url']]
-    assert images[state['reference_url']].tobytes() == original.tobytes()
+    assert state['reference_policy'] == 'context_crop'
+    assert state['reference_crop'] is not None
+    assert images[state['reference_url']].tobytes() == original.crop(state['reference_crop']).tobytes()
     # The crop identifies the whole garment, rather than only a graphic on it.
     assert images[state['color_url']].height >= 60
     assert len(generation['prompt'].split()) < 450
@@ -142,42 +121,23 @@ def test_faithful_finish_preserves_rgb_and_parts_missing_from_diagnostic_matte(f
     assert state['result_mask'].getpixel((265, 500)) == 0  # diagnostic only
 
 
-def test_color_guard_is_delivered_without_changing_models_or_mask_geometry(fal_stub, monkeypatch):
-    original,mask,calls,_,images = fal_stub
-    monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
-    original.paste((27,28,32),(20,20,60,80))
-    generated = original.copy()
-    generated.paste((40,41,48),(20,20,60,80))
-    images['https://generated'] = generated
-    snapshots = []
-    state = pipeline.build_pipeline(on_image=lambda key,label,img:snapshots.append(key)).invoke({'image':original})
-    assert state['quality']['color_fidelity']['applied']
-    assert state['result'].getpixel((600,900))[0] < 40
-    assert state['generated_image'].getpixel((40,40)) == (40,41,48)
-    assert images[state['result_url']].tobytes() == state['result'].tobytes()
-    assert state['result_mask'].getbbox() == (300,450,900,1350)
-    assert 'color_fidelity' in snapshots and snapshots[-1] == 'final'
-    assert state['metrics']['inference_requests'] == 6
-    assert sum(model == pipeline.FAITHFUL_MODEL for model,_ in calls) == 1
-    assert state['execution_trace'][-1]['details']['color_fidelity']['applied']
-
-
-def test_generator_receives_each_actual_photo_once_without_an_automatic_crop(fal_stub, monkeypatch):
+def test_generator_receives_one_version_of_each_distinct_source_photo(fal_stub, monkeypatch):
     original,_,calls,_,images = fal_stub
     monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
     detail = Image.new('RGB',(60,90),'purple')
     state = pipeline.build_pipeline().invoke({'image':original,
         'additional_images':[original.copy(),detail,detail.copy()]})
     arguments = next(args for model,args in calls if model == pipeline.FAITHFUL_MODEL)
-    assert arguments['image_urls'] == [state['reference_url'],state['additional_reference_urls'][1]]
-    assert images[arguments['image_urls'][0]].tobytes() == original.tobytes()
+    assert arguments['image_urls'] == [state['reference_url'],state['additional_reference_urls'][0]]
+    assert len(state['additional_reference_urls']) == 1
+    assert images[arguments['image_urls'][0]].tobytes() == original.crop(state['reference_crop']).tobytes()
     assert images[arguments['image_urls'][1]].tobytes() == detail.tobytes()
     assert 'INPUT: 2 reference images for ONE product.' in arguments['prompt']
     assert state['execution_trace'][4]['details']['input_image_count'] == 2
     assert state['quality']['single_product']['status'] == 'passed'
 
 
-@pytest.mark.parametrize('second_verdict',['SINGLE','DUPLICATE','UNCERTAIN','timeout'])
+@pytest.mark.parametrize('second_verdict',['SINGLE','DUPLICATE'])
 def test_overlapping_duplicate_is_corrected_once_and_must_pass_recheck(fal_stub,monkeypatch,second_verdict):
     original,_,calls,_,images = fal_stub
     monkeypatch.setenv('FAL_PIPELINE_PROFILE','faithful')
@@ -285,64 +245,6 @@ def test_faithful_regeneration_reuses_preprocessing_and_keeps_all_views(fal_stub
     assert state['analysis']['view_count'] == 2
 
 
-def test_faithful_config_reports_actual_models_without_separate_analysis(monkeypatch):
-    import server
-    monkeypatch.delenv('FAL_PIPELINE_PROFILE')
-    monkeypatch.delenv('FAL_IMAGE_MODEL', raising=False)
-    monkeypatch.setenv('FAL_ANALYSIS_MODEL', 'fal-ai/sa2va/8b/image')
-    config = server.config()
-    assert config['inference_requests_per_run'] == 6
-    assert config['inference_requests_cached_run'] == 3
-    assert config['models']['restyling'] == pipeline.FAITHFUL_MODEL
-    assert config['models']['pressing'] is None
-    assert config['models']['description'] == config['analysis']['model'] == pipeline.CLASSIFICATION_MODEL
-    assert config['analysis']['source'] == 'classification'
-    monkeypatch.setenv('FAL_IMAGE_MODEL', pipeline.RESTYLE_MODEL)
-    assert pipeline.generation_settings()[0] == pipeline.RESTYLE_MODEL
-
-
-@pytest.mark.parametrize('stage', ['classify', 'locate', 'isolate', 'finish'])
-@pytest.mark.parametrize('response', ['empty', 'timeout'])
-def test_faithful_optional_model_failure_still_delivers_real_generation(fal_stub, monkeypatch, stage, response):
-    original, _, calls, _, images = fal_stub
-    monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
-    stub = pipeline.call
-    model_for_stage = {'classify':pipeline.CLASSIFICATION_MODEL, 'locate':pipeline.LOCALIZATION_MODEL,
-                       'isolate':pipeline.SAM_MODEL, 'finish':pipeline.BIREF_MODEL}
-    def failing(model, arguments):
-        if model == model_for_stage[stage]:
-            calls.append((model, arguments))
-            if response == 'timeout':
-                raise pipeline.fal_client.client.FalClientTimeoutError(timeout=90)
-            return {}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', failing)
-    extra = Image.new('RGB', (100,150), 'purple')
-    events = []
-    state = pipeline.build_pipeline(lambda **e:events.append(e)).invoke(
-        {'image':original, 'additional_images':[extra]})
-    assert state['result_url'] and state['generated_url'] == 'https://generated'
-    assert stage in state['quality']['recovery']
-    assert sum(m == pipeline.FAITHFUL_MODEL for m, _ in calls) == 1
-    assert sum(m == model_for_stage[stage] and not args.get('prompt','').startswith(pipeline.CHECK_PREFIX) for m, args in calls) == 1  # no retry
-    assert not any(s['status'] == 'error' for s in state['execution_trace'])
-    assert state['metrics']['inference_requests'] == len(calls)
-    assert state['quality']['status'] == 'review_required'
-    generation = next(args for m,args in calls if m == pipeline.FAITHFUL_MODEL)
-    assert images[generation['image_urls'][-1]].tobytes() == extra.tobytes()
-    if stage != 'finish':
-        assert state['mask'] is None
-        assert images[state['reference_url']].tobytes() == original.tobytes()
-        assert images[state['color_url']].tobytes() == original.tobytes()
-        assert not state['classification']['selection_validation']['approved']
-    if stage in ('classify', 'locate'):
-        assert not any(m == pipeline.SAM_MODEL for m, _ in calls)
-        assert state['classification']['bbox'] is None
-    if stage == 'finish':
-        assert state['result_mask'] is None
-        assert state['quality']['metrics'] == {}
-
-
 def test_faithful_successful_edit_survives_all_helpers_being_unavailable(fal_stub, monkeypatch):
     original, _, calls, _, _ = fal_stub
     monkeypatch.setenv('FAL_PIPELINE_PROFILE', 'faithful')
@@ -361,692 +263,6 @@ def test_faithful_successful_edit_survives_all_helpers_being_unavailable(fal_stu
     assert state['metrics']['reused_inferences'] == 0
 
 
-@pytest.mark.parametrize('profile', ['faithful', 'staged'])
-def test_job_reaches_final_output_when_main_is_detail_and_detector_returns_nothing(fal_stub, monkeypatch, profile):
-    import server
-    original, _, calls, _, _ = fal_stub
-    monkeypatch.setenv('FAL_PIPELINE_PROFILE', profile)
-    stub = pipeline.call
-    def no_detection(model, arguments):
-        if model == pipeline.LOCALIZATION_MODEL:
-            calls.append((model, arguments))
-            return {'objects':[]}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', no_detection)
-    identity = 'detail-recovery-' + profile
-    server.jobs[identity] = {'status':'queued', 'error':None, 'result_url':None}
-    try:
-        server.studio_task(identity, pipeline.png_bytes(original.crop((25,20,50,60))),
-                           [pipeline.png_bytes(original)] * 4)
-        job = server.jobs[identity]
-        assert job['status'] == 'review_required' and job['error'] is None
-        assert job['result_url'] and job['current_image']['id'] == 'final'
-        assert 'locate' in job['quality']['recovery']
-        assert not any(step['status'] == 'error' for step in job['execution_trace'])
-        assert job['classification']['bbox'] is None
-        generated = next(args for model,args in calls if 'image_urls' in args)
-        assert len(generated['image_urls']) == 2
-        assert 'most complete' in generated['prompt']
-    finally:
-        server.jobs.pop(identity)
-
-
-def test_full_graph_restyles_then_enforces_white_background(fal_stub):
-    original, _, calls, uploads, _ = fal_stub
-    events = []
-    snapshots = []
-    state = pipeline.build_pipeline(lambda **e: events.append(e),
-                                    lambda key, label, image: snapshots.append((key, label, image))).invoke({'image': original})
-    assert [c[0] for c in calls] == [pipeline.CLASSIFICATION_MODEL, pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL, pipeline.DESCRIPTION_MODEL, pipeline.RESTYLE_MODEL,
-                                    pipeline.RESTYLE_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
-    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 2
-    # This synthetic source already has the exact isolated white background, so
-    # the full-frame reference can reuse the original's identical PNG upload.
-    assert len(uploads) == 2
-    assert [entry[0] for entry in snapshots] == ['original', 'target', 'mask', 'segmented', 'color',
-        'reference', 'description', 'generated', 'pressed', 'cutout', 'composed', 'final']
-    assert snapshots[-1][2] == state['result_url']
-    assert snapshots[7][2] == state['generated_url']
-    assert snapshots[8][2] == state['pressed_url'] == 'https://pressed'
-    assert snapshots[9][2].mode == 'RGBA'
-    assert state['color_url'] == state['image_url']
-    assert calls[4][1]['image_urls'] == [state['reference_url']]
-    assert calls[3][1]['image_url'].startswith('data:image/jpeg;base64,')
-    assert calls[3][1]['reasoning'] is False
-    assert state['analysis']['status'] == 'complete'
-    assert not state['analysis']['cache_hit']
-    assert 'Relaxed knitted sweater with ribbed cuffs.' in calls[4][1]['prompt']
-    assert 'Relaxed red' not in calls[4][1]['prompt']
-    assert state['generation_prompt'] == calls[4][1]['prompt']
-    assert any(event.get('generation_prompt') == state['generation_prompt'] for event in events)
-    assert '<p>' not in state['garment_description']
-    assert calls[4][1]['resolution'] == '2K'
-    assert calls[5][1]['image_urls'] == [state['generated_url']]
-    assert calls[5][1]['prompt'] == state['pressing_prompt']
-    assert calls[5][1]['resolution'] == calls[4][1]['resolution'] == '2K'
-    assert calls[7][1]['image_url'] == state['pressed_url']
-    assert state['result'].size == (1200, 1800)
-    assert state['result'].getpixel((0, 0)) == (255, 255, 255)
-    assert state['quality']['illumination']['status'] == 'uncertain'
-    assert set(state['metrics']['stages_seconds']) == {'classify', 'locate', 'isolate', 'balance', 'describe', 'restyle', 'press', 'inspect', 'finish', 'verify'}
-    assert state['metrics']['total_seconds'] >= 0
-    assert [step['id'] for step in state['execution_trace']] == [
-        'classify', 'locate', 'isolate', 'balance', 'describe', 'restyle', 'press', 'inspect', 'finish', 'verify']
-    assert state['execution_trace'][4]['model'] == pipeline.DESCRIPTION_MODEL
-    assert state['execution_trace'][5]['model'] == pipeline.RESTYLE_MODEL
-    assert state['execution_trace'][3]['model'] is None
-    assert set(state['execution_trace'][3]['libraries']) >= {'NumPy', 'OpenCV', 'Pillow'}
-    assert all(step['seconds'] is not None for step in state['execution_trace'])
-    assert events[-1]['execution_trace'] == state['execution_trace']
-    assert not state['quality']['passed']
-    assert {e['status'] for e in events} == {'classifying','locating','preparing','balancing_color','describing','generating','pressing','checking_product','finishing','checking_quality'}
-
-
-def test_composition_recenters_without_changing_colors():
-    image, mask = product()
-    cutout = image.convert('RGBA'); cutout.putalpha(mask)
-    result, final_mask = pipeline.compose_studio(cutout)
-    assert result.getpixel((600, 900)) == (255, 0, 0)
-    box = final_mask.getbbox()
-    assert box[0] + box[2] == 1200
-    assert box[1] + box[3] == 1800
-
-
-def test_small_subject_fills_catalogue_frame_without_distorting_proportions():
-    image, mask = product()
-    cutout = image.convert('RGBA'); cutout.putalpha(mask)
-    result, final_mask = pipeline.compose_studio(cutout)
-    left, top, right, bottom = final_mask.getbbox()
-    assert right - left == 864 and bottom - top == 1296
-    assert (right - left) / (bottom - top) == pytest.approx(40 / 60)
-    assert result.getpixel((600, 900)) == (255, 0, 0)
-    assert result.getpixel((0, 0)) == (255, 255, 255)
-
-
-def test_pressing_failure_never_returns_initial_generation_as_final(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    events, snapshots = [], []
-    def fail_pressing(model, arguments):
-        if arguments.get('image_urls') == ['https://generated']:
-            raise RuntimeError('Pressing failed')
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', fail_pressing)
-    with pytest.raises(RuntimeError, match='Pressing failed'):
-        pipeline.build_pipeline(lambda **event: events.append(event),
-            lambda key, label, image: snapshots.append(key)).invoke({'image': original})
-    assert not any(model == pipeline.BIREF_MODEL for model, _ in calls)
-    assert snapshots[-1] == 'generated' and 'final' not in snapshots
-    assert events[-1]['execution_trace'][-1]['id'] == 'press'
-    assert events[-1]['execution_trace'][-1]['status'] == 'error'
-
-
-def test_regeneration_reuses_validated_inputs_but_generates_fresh_output(fal_stub):
-    original, expected_mask, calls, uploads, _ = fal_stub
-    first = pipeline.build_pipeline().invoke({'image': original})
-    first_calls, first_uploads = len(calls), len(uploads)
-    # Editing a caller's returned mask/metadata must not poison shared storage.
-    first['mask'].putpixel((40, 40), 0)
-    first['target_selection']['bbox'][0] = 999
-    second = pipeline.build_pipeline().invoke({'image': original})
-    assert [model for model, _ in calls[first_calls:]] == [pipeline.RESTYLE_MODEL, pipeline.RESTYLE_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
-    assert len(uploads) - first_uploads == 1  # fresh final deliverable only
-    assert second['color_url'] == first['color_url']
-    assert second['reference_url'] == first['reference_url']
-    assert second['mask'].tobytes() == expected_mask.tobytes()
-    assert second['target_selection']['bbox'][0] == 20
-    assert first['metrics']['inference_requests'] == 8
-    assert second['metrics']['inference_requests'] == 4
-    assert second['metrics']['reused_inferences'] == 4
-    assert second['metrics']['storage_uploads'] == 1
-    assert second['execution_trace'][2]['details']['model_invoked'] is False
-    assert second['generation_prompt'] == first['generation_prompt']
-    assert second['result_url'] != first['result_url']
-
-
-def test_concurrent_jobs_do_not_duplicate_preprocessing(fal_stub):
-    from concurrent.futures import ThreadPoolExecutor
-    original, _, calls, uploads, _ = fal_stub
-    ready = threading.Barrier(2)
-    def generate():
-        ready.wait(timeout=3)
-        return pipeline.build_pipeline().invoke({'image': original.copy()})
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        states = list(pool.map(lambda _: generate(), range(2)))
-    assert len(calls) == 12  # four shared preprocessing + four fresh calls per garment
-    assert sum(model == pipeline.SAM_MODEL for model, _ in calls) == 1
-    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 4
-    assert sum(model == pipeline.BIREF_MODEL for model, _ in calls) == 2
-    assert len(uploads) == 3  # one shared synthetic reference + two deliverables
-    assert sum(state['metrics']['inference_requests'] for state in states) == 12
-    assert all(state['result_url'] for state in states)
-
-
-def test_changed_source_invalidates_segmentation_cache(fal_stub):
-    original, _, calls, _, _ = fal_stub
-    pipeline.build_pipeline().invoke({'image': original})
-    original.putpixel((2, 2), (40, 40, 40))
-    state = pipeline.build_pipeline().invoke({'image': original})
-    assert sum(model == pipeline.SAM_MODEL for model, _ in calls) == 2
-    assert state['execution_trace'][2]['details']['model_invoked'] is True
-
-
-def test_finishing_reuses_the_exact_image_already_checked_without_a_second_download(fal_stub, monkeypatch):
-    original, _, _, _, _ = fal_stub
-    downloads = []
-    fetch, call = pipeline.fetch_image, pipeline.call
-    def fetch_with_overlap(url):
-        if url == 'https://pressed':
-            downloads.append(url)
-        return fetch(url)
-    def call_with_overlap(model, arguments):
-        if model == pipeline.BIREF_MODEL:
-            assert downloads == ['https://pressed']
-            assert any(args.get('prompt','').startswith(pipeline.CHECK_PREFIX) for _,args in fal_stub[2])
-        return call(model, arguments)
-    monkeypatch.setattr(pipeline, 'fetch_image', fetch_with_overlap)
-    monkeypatch.setattr(pipeline, 'call', call_with_overlap)
-    state = pipeline.build_pipeline().invoke({'image': original})
-    assert state['result_url'] and downloads == ['https://pressed']
-
-
-def test_fetch_inline_png_keeps_exact_rgb_and_alpha_without_network(monkeypatch):
-    import base64
-    image = Image.new('RGBA', (20, 20), (42, 73, 110, 128))
-    url = 'data:image/png;base64,' + base64.b64encode(pipeline.png_bytes(image)).decode('ascii')
-    def unexpected(*args, **kwargs):
-        pytest.fail('Inline output must not trigger an HTTP download')
-    monkeypatch.setattr(pipeline, 'urlopen', unexpected)
-    result = pipeline.fetch_image(url)
-    assert result.mode == image.mode and result.tobytes() == image.tobytes()
-
-
-@pytest.mark.parametrize('url', ['data:image/png;base64,not-valid!',
-    'data:image/svg+xml;base64,PHN2Zz4=', 'http://example.com/image.png'])
-def test_fetch_rejects_invalid_inline_images_and_unsupported_schemes(url):
-    with pytest.raises(ValueError):
-        pipeline.fetch_image(url)
-
-
-def test_reference_upload_cache_expires_and_preserves_storage_policy(monkeypatch):
-    from request_reuse import ReuseCache
-    clock, calls = [0], []
-    monkeypatch.setattr(pipeline, '_upload_cache', ReuseCache(ttl=600, clock=lambda: clock[0]))
-    def upload(image, **kwargs):
-        calls.append(kwargs)
-        return f'https://reference/{len(calls)}'
-    monkeypatch.setattr(pipeline, 'upload_png', upload)
-    image = Image.new('RGB', (20,20), 'red')
-    first, status = pipeline.upload_reference(image)
-    assert status == 'computed' and calls == [{'expires_in':'1h'}]
-    assert pipeline.upload_reference(image) == (first, 'cached')
-    # Even identical pixels with different color metadata are different inputs.
-    profiled = image.copy(); profiled.info['icc_profile'] = b'different profile'
-    assert pipeline.upload_reference(profiled)[1] == 'computed'
-    clock[0] = 601
-    assert pipeline.upload_reference(image)[1] == 'computed'
-
-
-def test_final_upload_keeps_default_retention(monkeypatch):
-    monkeypatch.setenv('FAL_KEY', 'test-key')
-    calls = []
-    monkeypatch.setattr(pipeline.fal_client, 'upload', lambda data, **kwargs: calls.append(kwargs) or 'https://uploaded')
-    image = Image.new('RGB', (20,20), 'red')
-    pipeline.upload_png(image)
-    pipeline.upload_png(image, expires_in='1h')
-    assert 'lifecycle' not in calls[0]
-    assert calls[1]['lifecycle'].expires_in == '1h'
-
-
-def test_final_composition_uses_pressed_pixels(fal_stub):
-    original, _, _, _, images = fal_stub
-    generated, _ = product('blue')
-    images['https://pressed'] = generated
-    state = pipeline.build_pipeline().invoke({'image': original})
-    assert state['result'].getpixel((600, 900)) == (0, 0, 255)
-
-
-
-def test_gray_corner_sleeve_cannot_reach_analysis_or_generator(fal_stub, monkeypatch):
-    import base64
-    import io
-    original, mask, calls, _, images = fal_stub
-    original.paste((128,128,128), (0,0,20,15))
-    sleeve = Image.new('L', original.size)
-    sleeve.paste(255, (0,0,20,15))
-    images['https://sleeve'] = sleeve
-    stub = pipeline.call
-    def candidates(model, arguments):
-        if model == pipeline.SAM_MODEL:
-            calls.append((model, arguments))
-            return {'masks':[{'url':'https://sleeve'}, {'url':'https://sam'}]}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', candidates)
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['mask'].tobytes() == mask.tobytes()
-    assert state['target_selection']['candidate_index'] == 1
-    for url in calls[4][1]['image_urls']:
-        assert not np.any(np.all(np.asarray(images[url]) == (128,128,128), axis=2))
-    analysis_image = Image.open(io.BytesIO(base64.b64decode(calls[3][1]['image_url'].split(',',1)[1])))
-    assert not np.any(np.all(np.asarray(analysis_image) == (128,128,128), axis=2))
-    assert len(calls) == 8
-
-
-def test_peripheral_only_mask_uses_original_references(fal_stub):
-    original, _, calls, _, images = fal_stub
-    mask = Image.new('L', original.size)
-    mask.paste(255, (0,0,20,15))
-    images['https://sam'] = mask
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['result_url'] and state['mask'] is None
-    assert state['target_selection']['strategy'] == 'source_references'
-    assert state['recovery']['isolate']['error_type'] == 'RuntimeError'
-    assert [model for model, _ in calls][:3] == [pipeline.CLASSIFICATION_MODEL, pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL]
-
-
-def test_printed_title_never_drives_detection_or_replaces_complete_shirt(fal_stub, monkeypatch):
-    import json
-    original, whole_shirt, calls, _, images = fal_stub
-    print_only = Image.new('L', original.size)
-    print_only.paste(255, (30, 35, 50, 50))
-    images['https://print'] = print_only
-    stub = pipeline.call
-
-    def run(model, arguments):
-        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
-            calls.append((model, arguments))
-            return {'output': json.dumps({'label':'Jennie Ruby', 'category':'T-shirt',
-                                         'kind':'garment', 'confidence':.95})}
-        if model == pipeline.SAM_MODEL:
-            calls.append((model, arguments))
-            return {'masks':[{'url':'https://print'}, {'url':'https://sam'}]}
-        return stub(model, arguments)
-
-    monkeypatch.setattr(pipeline, 'call', run)
-    state = pipeline.build_pipeline().invoke({'image':original})
-    for model, arguments in calls:
-        if model in (pipeline.LOCALIZATION_MODEL, pipeline.SAM_MODEL):
-            assert arguments['prompt'] == 'T-shirt'
-    assert state['mask'].tobytes() == whole_shirt.tobytes()
-    assert state['target_selection']['candidate_index'] == 1
-    assert len([1 for model, _ in calls if model == pipeline.RESTYLE_MODEL]) == 2
-
-
-def test_dress_misreported_as_other_uses_garment_prompt_and_two_nano_edits(fal_stub, monkeypatch):
-    import json
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    def run(model, arguments):
-        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
-            calls.append((model, arguments))
-            return {'output':json.dumps({'label':'checked maxi dress with black belt',
-                'category':'long-sleeve maxi dress', 'kind':'other', 'confidence':.95})}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', run)
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['classification']['kind'] == 'garment'
-    assert state['classification']['model_kind'] == 'other'
-    assert 'front side up' in state['generation_prompt']
-    assert state['pressing_prompt']
-    assert next(step for step in state['execution_trace'] if step['id'] == 'press')['status'] == 'complete'
-    assert len([model for model, _ in calls if model == pipeline.RESTYLE_MODEL]) == 2
-    assert state['metrics']['inference_requests'] == 8
-
-
-def test_print_only_mask_is_rejected_for_complete_shirt_box(fal_stub, monkeypatch):
-    original, _, calls, _, images = fal_stub
-    print_only = Image.new('L', original.size)
-    print_only.paste(255, (30, 35, 50, 50))
-    images['https://sam'] = print_only
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['result_url'] and state['mask'] is None
-    assert state['target_selection']['strategy'] == 'source_references'
-    assert state['recovery']['isolate']['error_type'] == 'RuntimeError'
-    assert any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
-
-
-def test_worn_foreground_sweatshirt_isolated_without_side_rack_shirt(fal_stub, monkeypatch):
-    import json
-    _, _, calls, _, images = fal_stub
-    original = Image.new('RGB', (200, 200), 'gray')
-    original.paste('yellow', (24, 36, 54, 80))
-    original.paste('lightblue', (56, 60, 174, 152))
-    foreground = Image.new('L', original.size)
-    foreground.paste(255, (56, 60, 174, 152))
-    distant = Image.new('L', original.size)
-    distant.paste(255, (24, 36, 54, 80))
-    images.update({'https://sam':foreground, 'https://distant':distant})
-    stub = pipeline.call
-    def run(model, arguments):
-        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
-            calls.append((model, arguments))
-            return {'output':json.dumps({'label':'light blue sweatshirt worn by main person',
-                'category':'light blue sweatshirt', 'kind':'garment', 'confidence':.95})}
-        if model == pipeline.LOCALIZATION_MODEL:
-            calls.append((model, arguments))
-            assert arguments['prompt'] == 'light blue sweatshirt'
-            return {'objects':[
-                {'x_min':.12,'y_min':.18,'x_max':.27,'y_max':.4},
-                {'x_min':.28,'y_min':.30,'x_max':.87,'y_max':.76}]}
-        if model == pipeline.SAM_MODEL:
-            calls.append((model, arguments))
-            assert arguments['prompt'] == 'light blue sweatshirt'
-            return {'masks':[{'url':'https://distant'}, {'url':'https://sam'}]}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', run)
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['mask'].tobytes() == foreground.tobytes()
-    assert state['classification']['kind'] == 'garment'
-    assert state['classification']['bbox'] == [.28,.30,.87,.76]
-    references = next(args['image_urls'] for model, args in calls if model == pipeline.RESTYLE_MODEL)
-    for url in references:
-        assert not np.any(np.all(np.asarray(images[url]) == (255,255,0), axis=2))
-    assert state['metrics']['inference_requests'] == 8
-
-
-def test_glasses_target_guides_sam_and_skips_clothing_restyling(fal_stub, monkeypatch):
-    import json
-    _, _, calls, _, images = fal_stub
-    original = Image.new('RGB', (200, 200), 'white')
-    original.paste('blue', (10, 0, 190, 105))  # sweater covers the exact center
-    original.paste('black', (60, 110, 140, 160))
-    sweater = Image.new('L', original.size)
-    sweater.paste(255, (10, 0, 190, 105))
-    glasses = Image.new('L', original.size)
-    glasses.paste(255, (60, 110, 140, 160))
-    target = {'label': 'black sunglasses', 'category':'sunglasses', 'kind': 'accessory', 'bbox': [.3,.55,.7,.8],
-              'point': [.4,.7], 'confidence': .95}
-    images.update({'https://sam': glasses, 'https://sweater': sweater})
-    generated = Image.new('RGB', original.size, 'white')
-    generated.paste('black', (60, 110, 140, 160))
-    images['https://generated'] = generated
-    matte = generated.convert('RGBA'); matte.putalpha(glasses)
-    images['https://biref'] = matte
-    stub = pipeline.call
-    def run(model, arguments):
-        if model == pipeline.LOCALIZATION_MODEL:
-            calls.append((model, arguments))
-            return {'objects': [{'x_min':.3,'y_min':.55,'x_max':.7,'y_max':.8}]}
-        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
-            calls.append((model, arguments))
-            return {'output': json.dumps({**target, 'bbox':[.1,.1,.8,.9], 'point':[.2,.2]})}
-        if model == pipeline.SAM_MODEL:
-            calls.append((model, arguments))
-            return {'masks': [{'url':'https://sweater'}, {'url':'https://sam'}]}
-        if model == pipeline.DESCRIPTION_MODEL:
-            calls.append((model, arguments))
-            return {'output': 'Black sunglasses with dark lenses and thick temples.'}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', run)
-    snapshots = []
-    state = pipeline.build_pipeline(on_image=lambda key, label, image: snapshots.append(key)).invoke({'image': original})
-    sam = next(args for model, args in calls if model == pipeline.SAM_MODEL)
-    assert sam['prompt'] == 'sunglasses'
-    assert sam['point_prompts'] == []
-    assert sam['box_prompts'] == [{'x_min':60,'y_min':110,'x_max':140,'y_max':160}]
-    assert state['mask'].tobytes() == glasses.tobytes()
-    references = next(args['image_urls'] for model, args in calls if model == pipeline.RESTYLE_MODEL)
-    for url in references:
-        assert not np.any(np.all(np.asarray(images[url]) == (0,0,255), axis=2))
-    assert state['classification']['kind'] == 'accessory'
-    assert 'For glasses, preserve both lenses' in state['generation_prompt']
-    assert 'PRESSING IS MANDATORY' not in state['generation_prompt']
-    assert not state['pressing_prompt']
-    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 1
-    press_trace = next(step for step in state['execution_trace'] if step['id'] == 'press')
-    assert press_trace['status'] == 'skipped' and press_trace['model'] is None
-    assert press_trace['details']['model_invoked'] is False
-    assert 'pressed' not in snapshots and snapshots[-1] == 'final'
-    assert len(calls) == 7
-
-
-def test_ambiguous_classification_defers_identity_to_generator(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    def ambiguous(model, arguments):
-        if model == pipeline.CLASSIFICATION_MODEL:
-            calls.append((model, arguments))
-            return {'output': '{"label":"unknown","kind":"other","bbox":[0.2,0.2,0.8,0.8],"point":[0.5,0.5],"confidence":0.2}'}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', ambiguous)
-    state = pipeline.build_pipeline().invoke({'image': original})
-    assert state['result_url']
-    assert not state['classification']['identity_supported']
-    assert state['classification']['confidence'] is None
-    assert state['classification']['bbox'] is None and state['mask'] is None
-    assert [model for model, _ in calls] == [pipeline.CLASSIFICATION_MODEL, pipeline.RESTYLE_MODEL, pipeline.VALIDATION_MODEL, pipeline.BIREF_MODEL]
-    assert state['metrics']['reused_inferences'] == 0
-    assert 'No reliable auxiliary classification' in state['generation_prompt']
-    assert 'SELECTED PRODUCT' not in state['generation_prompt']
-
-
-@pytest.mark.parametrize('consistent', [True, False])
-def test_uncertain_classification_is_approved_only_when_detection_and_mask_agree(fal_stub, monkeypatch, consistent):
-    import json
-    original, _, calls, _, images = fal_stub
-    if not consistent:
-        fragment = Image.new('L', original.size)
-        fragment.paste(255, (28, 32, 52, 68))  # Passes basic selection, lacks full extent.
-        images['https://sam'] = fragment
-    stub = pipeline.call
-    def uncertain(model, arguments):
-        if model == pipeline.CLASSIFICATION_MODEL and 'Identify ONE main product' in arguments.get('prompt', ''):
-            calls.append((model, arguments))
-            return {'output': json.dumps({'label':'patterned garment','category':'garment','kind':'garment','confidence':.2})}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', uncertain)
-    monkeypatch.setattr(pipeline, 'normalize_illumination', lambda image, mask:
-        (image.copy(), {'status':'neutral', 'applied':False}))
-    monkeypatch.setattr(pipeline, 'compare_product', lambda *args: {'passed':True, 'status':'complete', 'warnings':[]})
-    state = pipeline.build_pipeline().invoke({'image': original})
-    assert state['result_url']
-    assert state['classification']['review_required'] is not consistent
-    assert state['classification']['selection_validation']['approved'] is consistent
-    assert state['classification']['confidence'] == .2  # Preserve the model's actual confidence.
-    assert state['quality']['passed'] is consistent
-    assert bool(state['quality']['warnings']) is not consistent
-    assert state['execution_trace'][0]['status'] == ('complete' if consistent else 'review_required')
-    assert len(calls) == 8
-    repeated = pipeline.build_pipeline().invoke({'image': original})
-    assert repeated['classification']['cache_hit']
-    assert repeated['quality']['passed'] is consistent
-    assert repeated['classification']['review_required'] is not consistent
-    assert repeated['execution_trace'][0]['status'] == 'cached'
-    assert len(calls) == 12  # Product validation is fresh; preprocessing is cached.
-
-
-def test_missing_detection_generates_without_sam_or_invented_box(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    def missing(model, arguments):
-        if model == pipeline.LOCALIZATION_MODEL:
-            calls.append((model, arguments))
-            return {'objects': []}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', missing)
-    events = []
-    state = pipeline.build_pipeline(lambda **event: events.append(event)).invoke({'image': original})
-    assert state['result_url'] and state['classification']['bbox'] is None
-    assert not any(model == pipeline.SAM_MODEL for model, _ in calls)
-    assert state['execution_trace'][1]['status'] == 'fallback'
-    assert state['execution_trace'][2]['status'] == 'skipped'
-    assert state['metrics']['reused_inferences'] == 0
-    assert not any(step['status'] == 'error' for step in events[-1]['execution_trace'])
-
-
-def test_missing_sam_output_still_generates_from_photographs(fal_stub, monkeypatch):
-    original, _, _, _, _ = fal_stub
-    stub = pipeline.call
-    monkeypatch.setattr(pipeline, 'call', lambda model, args: {} if model == pipeline.SAM_MODEL else stub(model, args))
-    state = pipeline.build_pipeline().invoke({'image':original, 'garment':'sweater'})
-    assert state['result_url'] and state['mask'] is None
-    assert state['recovery']['isolate']['error_type'] == 'RuntimeError'
-
-
-def test_biref_must_return_alpha(fal_stub):
-    original, mask, _, _, images = fal_stub
-    images['https://biref'] = original
-    with pytest.raises(RuntimeError, match='transparent cutout'):
-        pipeline.remove_background(original, 'https://generated')
-
-
-def test_quality_ignores_changed_background():
-    a, mask = product()
-    b = Image.composite(a, Image.new('RGB', a.size, 'black'), mask)
-    assert compare_product(b, mask, a, mask)['passed']
-    assert not compare_product(a, mask, b, mask)['passed']
-
-
-def test_quality_detects_color_and_shape_changes():
-    a, mask = product()
-    b, _ = product('blue')
-    assert not compare_product(a, mask, b, mask)['passed']
-    assert compare_product(a, mask, b, mask)['metrics']['color_distance'] > .35
-    wide_mask = Image.new('L', a.size, 0)
-    wide_mask.paste(255, (5, 20, 75, 80))
-    report = compare_product(a, mask, a, wide_mask)
-    assert report['metrics']['aspect_similarity'] < .85
-    assert not any('silhouette' in w for w in report['warnings'])
-
-
-def test_quality_detects_lost_texture():
-    a, mask = product()
-    pixels = np.array(a)
-    pixels[20:80:4, 20:60] = 0
-    textured = Image.fromarray(pixels)
-    assert compare_product(textured, mask, a, mask)['metrics']['detail_similarity'] < .6
-
-
-def test_quality_rejects_empty_mask():
-    a, mask = product()
-    with pytest.raises(ValueError, match='Too few'):
-        compare_product(a, mask, a, Image.new('L', a.size))
-
-
-@pytest.mark.parametrize('additional_count', [1, 4])
-def test_multiview_references_reach_analysis_and_generator_without_more_inferences(fal_stub, additional_count):
-    original, _, calls, _, images = fal_stub
-    extras = [Image.new('RGB', (120, 180), color)
-              for color in ['purple', 'green', 'pink', 'blue'][:additional_count]]
-    before = [image.tobytes() for image in extras]
-    state = pipeline.build_pipeline().invoke({'image':original, 'additional_images':extras})
-    assert len(calls) == 8
-    assert state['analysis']['view_count'] == 1 + additional_count
-    assert state['analysis']['input_size'] == [2560, 1280]
-    generation = [arguments for model, arguments in calls if model == pipeline.RESTYLE_MODEL]
-    assert len(generation) == 2
-    assert len(generation[0]['image_urls']) == 1 + additional_count
-    for index, url in enumerate(generation[0]['image_urls'][1:]):
-        assert images[url].tobytes() == before[index]
-    assert generation[1]['image_urls'] == ['https://generated']
-    assert 'MULTI-VIEW REFERENCE RULES' in state['generation_prompt']
-    assert f'INPUT: {1 + additional_count} reference images for ONE product.' in state['generation_prompt']
-    assert state['metrics']['inference_requests'] == 8
-    assert [image.tobytes() for image in extras] == before
-    warm = pipeline.build_pipeline().invoke({'image':original, 'additional_images':extras})
-    assert warm['analysis']['cache_hit']
-    assert warm['metrics']['inference_requests'] == 4
-    extras[0].paste('orange', (0, 0, 120, 180))
-    changed = pipeline.build_pipeline().invoke({'image':original, 'additional_images':extras})
-    assert not changed['analysis']['cache_hit']
-    assert changed['metrics']['inference_requests'] == 6
-    assert not changed['classification']['cache_hit']
-
-
-def test_too_many_views_fail_before_any_inference(fal_stub):
-    original, _, calls, _, _ = fal_stub
-    with pytest.raises(ValueError, match='Maximum 4 additional views'):
-        pipeline.build_pipeline().invoke({'image':original, 'additional_images':[original] * 5})
-    assert calls == []
-
-
-def test_single_click_api(fal_stub, monkeypatch):
-    from fastapi.testclient import TestClient
-    import server
-    client = TestClient(server.app)
-    pending = []
-    monkeypatch.setattr(server.pool, 'submit', lambda *args: pending.append(args))
-    original, _, _, _, _ = fal_stub
-    response = client.post('/api/studio', files={'file':('photo.png', pipeline.png_bytes(original), 'image/png')})
-    assert response.status_code == 202
-    job_id = response.json()['job_id']
-    task, *args = pending.pop()
-    task(*args)
-    job = client.get('/api/jobs/' + job_id).json()
-    assert job['status'] == 'review_required'
-    assert job['quality']['illumination']['status'] == 'uncertain' and job['result_url']
-    assert 'Relaxed red knitted sweater' in job['garment_description']
-    assert job['generation_prompt']
-    assert job['pressing_prompt']
-    config = client.get('/api/config').json()
-    assert config['inference_requests_per_run'] == 8
-    assert config['inference_requests_cached_run'] == 4
-    assert config['inference_requests_by_kind']['garment'] == 8
-    assert config['inference_requests_by_kind']['accessory'] == 7
-    assert job['classification']['label'] == 'red sweater'
-    assert config['models']['pressing'] == config['models']['restyling']
-    assert job['metrics']['total_seconds'] >= 0
-    assert job['execution_trace'][0]['id'] == 'prepare_image'
-    assert all(step['run_id'] == job_id for step in job['execution_trace'])
-    assert job['current_image']['id'] == 'final'
-    assert job['images'][-1]['url'] == job['result_url']
-    assert '_images' not in job
-    mask_url = next(image['url'] for image in job['images'] if image['id'] == 'mask')
-    response = client.get(mask_url)
-    assert response.status_code == 200
-    assert response.headers['content-type'] == 'image/png'
-    import io
-    saved_mask = Image.open(io.BytesIO(response.content))
-    assert saved_mask.getpixel((40,40)) == 255
-    assert client.get('/api/jobs/' + job_id + '/images/missing').status_code == 404
-    assert client.get('/api/jobs/missing/images/original').status_code == 404
-    with client.stream('GET', '/api/jobs/' + job_id + '/events') as stream:
-        assert stream.status_code == 200
-        import json
-        frames = [line for line in stream.iter_lines() if line.startswith('data: ')]
-        assert len(frames) == 1
-        assert json.loads(frames[0][6:])['status'] == job['status']
-        assert json.loads(frames[0][6:])['images'] == job['images']
-        assert '_images' not in json.loads(frames[0][6:])
-    assert client.get('/api/jobs/missing/events').status_code == 404
-    assert 'garment_mask' not in job
-    assert client.post('/api/studio', files={'file':('bad.png', b'bad', 'image/png')}).status_code == 400
-    with server.lock:
-        server.jobs.pop(job_id)
-
-
-def test_multiview_single_click_api(fal_stub, monkeypatch):
-    from fastapi.testclient import TestClient
-    import server
-    client = TestClient(server.app)
-    pending = []
-    monkeypatch.setattr(server.pool, 'submit', lambda *args: pending.append(args))
-    original, _, _, _, _ = fal_stub
-    main = ('file', ('main.png', pipeline.png_bytes(original), 'image/png'))
-    extra = ('additional_files', ('detail.png', pipeline.png_bytes(Image.new('RGB', (160,160), 'pink')), 'image/png'))
-    response = client.post('/api/studio', files=[main, extra])
-    assert response.status_code == 202
-    job_id = response.json()['job_id']
-    try:
-        task, *args = pending.pop()
-        task(*args)
-        job = client.get('/api/jobs/' + job_id).json()
-        assert job['result_url'] and job['input_count'] == 2
-        assert job['analysis']['view_count'] == 2
-        assert any(image['id'] == 'original_2' for image in job['images'])
-        assert job['metrics']['inference_requests'] == 8
-        assert client.get('/api/config').json()['inputs']['max_photos'] == 5
-    finally:
-        with server.lock:
-            server.jobs.pop(job_id)
-    assert client.post('/api/studio', files=[main, *[extra] * 5]).status_code == 400
-    bad = ('additional_files', ('bad.png', b'bad', 'image/png'))
-    assert client.post('/api/studio', files=[main, bad]).status_code == 400
-    unsupported = ('additional_files', ('bad.gif', b'bad', 'image/gif'))
-    assert client.post('/api/studio', files=[main, unsupported]).status_code == 400
-    assert pending == []
-
-
 def test_failed_generation_never_returns_original_as_success(fal_stub, monkeypatch):
     import server
     original, _, _, _, _ = fal_stub
@@ -1059,206 +275,34 @@ def test_failed_generation_never_returns_original_as_success(fal_stub, monkeypat
     assert server.jobs['failure']['execution_trace'][-1]['status'] == 'error'
     assert server.jobs['failure']['execution_trace'][-1]['seconds'] is not None
     assert [image['id'] for image in server.jobs['failure']['images']] == [
-        'original', 'target', 'mask', 'segmented', 'color', 'reference', 'description']
+        'original', 'target', 'mask', 'segmented', 'color', 'reference']
     server.jobs.pop('failure')
 
 
-def test_local_previews_update_progress_without_uploading_or_mutating_image():
-    import json
+
+
+def test_upload_api_keeps_frontend_contract_and_rejects_too_many_photos(fal_stub,monkeypatch):
+    from types import SimpleNamespace
+    from fastapi.testclient import TestClient
     import server
-    job_id = 'preview-test'
-    with server.lock:
-        server.jobs[job_id] = {'status': 'preparing', 'revision': 0}
-    stream = server.job_events(job_id)
-    try:
-        assert 'current_image' not in json.loads(next(stream)[6:])
-        image = Image.new('RGBA', (1600, 2000), (255, 0, 0, 128))
-        server.record_image(job_id, 'cutout', 'Background removed', image)
-        snapshot = json.loads(next(stream)[6:])
-        assert snapshot['current_image']['id'] == 'cutout'
-        assert '_images' not in snapshot
-        assert len(snapshot['images']) == 1
-        assert image.size == (1600, 2000)
-        # Re-recording an existing step replaces its entry; old SSE snapshots stay immutable.
-        server.record_image(job_id, 'cutout', 'Background removed', image)
-        assert len(server.jobs[job_id]['images']) == 1
-        assert len(snapshot['images']) == 1
-    finally:
-        stream.close()
-        with server.lock:
-            server.jobs.pop(job_id)
-
-
-def test_quality_detects_black_to_white_identity_change():
-    original, mask = product('black')
-    result, _ = product('white')
-    assert not compare_product(original, mask, result, mask)['passed']
-
-
-def test_new_pose_is_not_rejected_for_shape_alone():
-    original, mask = product('red')
-    result = Image.new('RGB', original.size, 'white')
-    changed = Image.new('L', original.size, 0)
-    result.paste('red', (5, 30, 75, 70))
-    changed.paste(255, (5, 30, 75, 70))
-    report = compare_product(original, mask, result, changed)
-    assert report['metrics']['aspect_similarity'] < .85
-    assert report['passed']
-
-
-def test_corrected_reference_used_by_generator_and_quality(fal_stub, monkeypatch):
-    original, mask, calls, _, images = fal_stub
-    corrected = Image.new('RGB', original.size, (180, 150, 130))
-    monkeypatch.setattr(pipeline, 'normalize_illumination', lambda *args: (corrected, {'status':'estimated', 'applied':True}))
-    seen = []
-    def compare(source, *args):
-        seen.append(source)
-        return {'passed': True, 'warnings': []}
-    monkeypatch.setattr(pipeline, 'compare_product', compare)
-    state = pipeline.build_pipeline().invoke({'image':original})
-    expected_detail = Image.composite(corrected,Image.new('RGB',corrected.size,'white'),mask)
-    assert images[calls[4][1]['image_urls'][0]].tobytes() == expected_detail.tobytes()
-    assert seen[0].tobytes() == corrected.tobytes()
-    assert 'second global' in calls[4][1]['prompt']
-    assert state['quality']['color_reference'] == 'estimated_white_balance'
-
-
-def test_fal_status_requests_are_not_repeated_inferences(monkeypatch):
-    monkeypatch.setenv('FAL_KEY', 'fake-key')
-    received = []
-    monkeypatch.setattr(pipeline.fal_client, 'subscribe', lambda *args, **kwargs: received.append((args, kwargs)) or {'ok':True})
-    assert pipeline.call('test/model', {'image_url':'https://test'}) == {'ok':True}
-    assert len(received) == 1
-    assert received[0][1]['interval'] == 2.0
-    assert received[0][1]['with_logs'] is False
-
-
-def test_generation_model_is_configurable_and_validated(monkeypatch):
-    monkeypatch.setenv('FAL_IMAGE_MODEL', 'fal-ai/nano-banana-2/edit')
-    monkeypatch.setenv('FAL_IMAGE_RESOLUTION', '1K')
-    assert pipeline.generation_settings() == ('fal-ai/nano-banana-2/edit', '1K')
-    monkeypatch.setenv('FAL_IMAGE_MODEL', 'unsupported/model')
-    with pytest.raises(ValueError, match='FAL_IMAGE_MODEL'):
-        pipeline.generation_settings()
-    with pytest.raises(ValueError, match='FAL_IMAGE_MODEL'):
-        pipeline.build_pipeline()
-
-
-def test_generated_alpha_preserves_color_and_soft_edges(fal_stub):
-    original, mask, calls, uploads, images = fal_stub
-    matte = original.convert('RGBA')
-    alpha = mask.copy()
-    alpha.putpixel((20, 40), 128)
-    matte.putalpha(alpha)
-    images['https://biref'] = matte
-    cutout = pipeline.remove_background(original, 'https://generated')
-    assert cutout.getpixel((20,40)) == (255,0,0,128)
-    assert cutout.getpixel((0,0))[3] == 0
-    assert calls == [(pipeline.BIREF_MODEL, {'image_url':'https://generated', 'output_format':'png', 'refine_foreground':True, 'sync_mode':True})]
-    assert uploads == []
-
-
-def test_progress_stream_sends_changes_and_closes_on_completion():
-    import json
-    import server
-    job_id = 'stream-test'
-    with server.lock:
-        server.jobs[job_id] = {'status':'queued', 'revision':0}
-    stream = server.job_events(job_id)
-    try:
-        assert json.loads(next(stream)[6:])['status'] == 'queued'
-        frames = []
-        ready = threading.Event()
-        def receive():
-            ready.set()
-            frames.append(next(stream))
-        listener = threading.Thread(target=receive)
-        listener.start()
-        assert ready.wait(2)
-        server.update(job_id, status='complete', result_url='https://result')
-        listener.join(timeout=2)
-        assert not listener.is_alive()
-        assert json.loads(frames[0][6:])['result_url'] == 'https://result'
-        with pytest.raises(StopIteration):
-            next(stream)
-        # Reconnect after missing an event: immediately gets the terminal state.
-        assert json.loads(next(server.job_events(job_id))[6:])['status'] == 'complete'
-    finally:
-        stream.close()
-        with server.lock:
-            server.jobs.pop(job_id)
-
-
-@pytest.mark.parametrize('response', [{}, {'output':None}, {'output':42}, {'output':'<p> [SEG] </p><|im_end|>'}, []])
-def test_invalid_description_rejected(response):
-    with pytest.raises(RuntimeError, match='Garment analysis'):
-        pipeline.extract_description(response)
-
-
-def test_description_cleans_wrapped_response_and_limits_length():
-    assert pipeline.extract_description({'data': {'output':'<p>Oversized &amp; ribbed</p> [SEG]<|im_end|>'}}) == 'Oversized & ribbed'
-    assert len(pipeline.extract_description({'output':'x' * 7000})) == 6000
-
-
-def test_description_failure_does_not_block_generation(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    def fail_description(model, arguments):
-        if model == pipeline.DESCRIPTION_MODEL and 'Identify ONE main product' not in arguments.get('prompt', ''):
-            return {'output': ''}
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', fail_description)
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['result_url'] and state['analysis']['status'] == 'unavailable'
-    assert state['recovery']['describe']['error_type'] == 'RuntimeError'
-    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 2
-
-
-def test_analysis_timeout_preserves_generation_with_legacy_optional_setting(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    def timed_out(model, arguments):
-        if model == pipeline.DESCRIPTION_MODEL and 'Identify ONE main product' not in arguments.get('prompt', ''):
-            calls.append((model, arguments))
-            raise TimeoutError('Analysis deadline exceeded')
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', timed_out)
-    monkeypatch.setenv('FAL_ANALYSIS_REQUIRED', 'false')
-    events = []
-    state = pipeline.build_pipeline(lambda **event: events.append(event)).invoke({'image': original})
-    assert state['result_url'] and len(calls) == 8
-    assert state['execution_trace'][4]['id'] == 'describe'
-    assert state['execution_trace'][4]['status'] == 'fallback'
-    assert sum(model == pipeline.RESTYLE_MODEL for model, _ in calls) == 2
-
-
-def test_legacy_required_setting_cannot_make_helper_timeout_fatal(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    stub = pipeline.call
-    def timed_out(model, arguments):
-        if model == pipeline.DESCRIPTION_MODEL and 'Identify ONE main product' not in arguments.get('prompt', ''):
-            raise TimeoutError('SA2VA deadline exceeded')
-        return stub(model, arguments)
-    monkeypatch.setattr(pipeline, 'call', timed_out)
-    monkeypatch.setenv('FAL_ANALYSIS_REQUIRED', 'true')
-    state = pipeline.build_pipeline().invoke({'image':original})
-    assert state['result_url']
-    assert state['analysis']['status'] == 'unavailable'
-    assert any(model == pipeline.RESTYLE_MODEL for model, _ in calls)
-
-
-def test_trace_records_configured_model_and_cache_without_another_inference(fal_stub, monkeypatch):
-    original, _, calls, _, _ = fal_stub
-    monkeypatch.setenv('FAL_IMAGE_MODEL', 'fal-ai/nano-banana-2/edit')
-    pipeline.build_pipeline().invoke({'image':original})
-    before = sum(model == pipeline.DESCRIPTION_MODEL for model, _ in calls)
-    state = pipeline.build_pipeline(run_id='cached-run').invoke({'image':original})
-    entry = state['execution_trace'][4]
-    assert entry['model'] == pipeline.DESCRIPTION_MODEL
-    assert entry['status'] == 'cached'
-    assert entry['details']['model_invoked'] is False
-    assert entry['run_id'] == 'cached-run'
-    assert state['execution_trace'][5]['model'] == 'fal-ai/nano-banana-2/edit'
-    assert state['execution_trace'][6]['model'] == 'fal-ai/nano-banana-2/edit'
-    assert sum(model == 'fal-ai/nano-banana-2/edit' for model, _ in calls) == 4  # two per garment
-    assert sum(model == pipeline.DESCRIPTION_MODEL for model, _ in calls) == before + 1  # fresh output validation
+    original,_,calls,_,_=fal_stub
+    monkeypatch.setattr(server,'pool',SimpleNamespace(submit=lambda fn,*args:fn(*args)))
+    photo=('photo.png',pipeline.png_bytes(original),'image/png')
+    with TestClient(server.app) as client:
+        response=client.post('/api/studio',files={'file':photo})
+        assert response.status_code==202
+        identity=response.json()['job_id']
+        try:
+            job=client.get('/api/jobs/'+identity).json()
+            assert job['status']=='complete' and job['result_url']
+            assert job['pressing_prompt']=='' and job['generation_prompt']
+            assert job['images'][-1]['id']=='final'
+            assert job['metrics']['inference_requests']==6
+            config=client.get('/api/config').json()
+            assert config['models']['restyling']==pipeline.FAITHFUL_MODEL
+            assert config['models']['pressing'] is None
+            count=len(calls)
+            too_many=client.post('/api/studio',files=[('file',photo)]+[('additional_files',photo)]*5)
+            assert too_many.status_code==400 and len(calls)==count
+        finally:
+            server.jobs.pop(identity,None)

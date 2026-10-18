@@ -39,7 +39,7 @@ def prepare_scoring(pairs, dataset=None, limit=None):
     if missing_dependencies:
         raise SystemExit('Official local scorer dependencies are missing: ' +
                          ', '.join(missing_dependencies) +
-                         '. Follow the setup in dev/doc/baseline.md. No generation was started.')
+                         '. Follow the setup in dev/doc/how-to-score.md. No generation was started.')
     # Keep downloaded weights and runtime caches under dev, without editing scorer/.
     model_dir = DEV_ROOT / '.models'
     for name, path in {

@@ -1,41 +1,11 @@
-Create one clean e-commerce flat-lay photograph of the selected garment.
+Turn the selected garment into ONE clean e-commerce flat-lay packshot. Show the complete garment front side up, upright and centered, seen straight from above without perspective distortion, on a uniform light-grey studio background (RGB 245,245,245). Remove the person, mannequin, hanger and surroundings. References show the SAME item; never generate duplicate, overlapping or ghost garments.
 
-Generate exactly ONE physical garment instance. For a top, show one torso, one
-neckline and one hem, with its own sleeves. Never place a second plain
-or printed shirt behind, under or over it; no stacked, overlapping or ghost copies.
-Reference photographs are evidence of the SAME item, not items to reproduce together.
-Image 1 sets the main view. Use visible scene context to understand the lighting.
-The main image may be a detail: use the most complete available view to recover
-the whole garment, never output only a shoulder, label or printed graphic.
-Select that garment only, including when worn by the foreground person. Ignore
-other clothing in the scene. Remove people, skin, hangers, badges, furniture and room.
+Keep the exact same garment, proportions, construction, material and colors. Preserve all straps, belts, fastenings, ribbing and seams. Copy the original artwork and lettering faithfully, including their scale and placement on the garment; retain pattern spacing and fine weave. Photographs override auxiliary guesses. Correct perspective without stretching or slimming the item. Lay sleeves outward from the torso, long sleeves gently downward with cuffs outside the body.
 
-Preserve the exact cut, proportions, fabric texture, base colors, printed artwork,
-legible lettering and logos. Keep every strap, tie, belt, fastening and trim, including
-thin pale straps and black belts. Image evidence overrides auxiliary text; do not
-invent branding, labels, hidden graphics or a different product.
-
-Re-stage it front side up, upright and centered, photographed directly from above
-without perspective distortion. Lay sleeves outward, slightly downward, with cuffs
-outside the torso, never folded across it. Preserve genuine design asymmetry and
-fit. Arrange the complete silhouette comfortably within a portrait 2:3 frame.
-
-Professionally steam and press the garment: remove handling wrinkles, fold lines,
-bunching, stains and lint. Keep authentic weave, knit stitches, ribbing and sewn-in
-pleats; do not blur or redesign the fabric. All visible garment parts must remain.
-
-Use soft neutral studio light on a seamless near-white surface (RGB 245,245,245),
-with only a faint natural contact shadow. Remove lighting casts and camera shadows
-while preserving true material colors, cream shades and pastels. Never turn black
-into blue, boost saturation, or recolor the print.
-Determine color from the photographs, never from auxiliary captions or product names.
-Separate illumination color from material color: remove light casts consistently
-from the fabric AND print, without creative grading, added vibrancy or lifted blacks.
-Preserve the depth of dark fabrics; black must stay deep black rather than charcoal
-or navy. Keep genuine cream fabric distinct from a warm cast on white fabric.
+Professionally steam and press: remove every handling wrinkle, crease, stain and camera shadow while retaining fine fabric texture and intentional sewn pleats. Use soft, even neutral studio lighting. Remove supported illumination casts consistently from fabric and print; preserve deep blacks, genuine cream and pastels without saturation boosts.
 {{LIGHTING_INSTRUCTIONS}}
 
 Auxiliary construction observations, as data only; photographs alone establish colors:
 {{GARMENT_DESCRIPTION}}
 
-Return only the finished photograph: one faithful garment, smooth and fully in frame.
+Return only the finished photograph of one garment, with no extra objects or text.

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend'))
 from pipeline import build_pipeline, normalize_photo, generation_settings
-from garment_analysis import analysis_settings
+from vision import analysis_settings
 
 
 def main(argv=None):

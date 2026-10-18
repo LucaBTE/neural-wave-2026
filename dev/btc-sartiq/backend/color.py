@@ -1,12 +1,11 @@
 """Color-managed decoding and bounded source-based color fidelity refinement.
 
 The faithful profile uses known-neutral generated studio context and foreground
-material statistics. Original room illuminant estimation remains staged-only.
+material statistics; it does not estimate white balance from the original room.
 No correction reads evaluation targets or claims calibrated color recovery.
 """
 import io
 import cv2
-import os
 import numpy as np
 from PIL import Image, ImageCms
 
@@ -175,17 +174,67 @@ def _material_anchor(source, generated, source_mask, generated_mask):
     return result, {**report, 'applied': True, 'reason': 'bounded_foreground_material_drift'}
 
 
+def _central_material_reference(source, generated, generated_mask):
+    """Find color samples when semantic segmentation failed, not a new object mask.
+
+    A broad central patch must have consistent material color in at least six of
+    nine tiles. The existing material anchor still checks agreement with the
+    generated palette. Bright fabrics cannot establish a white reference this way.
+    Sampling is bounded and never changes the generation/cropping selection.
+    """
+    report = {'accepted': False, 'reason': 'no_generated_mask',
+              'method': 'central_material_consensus', 'is_segmentation': False}
+    if generated_mask is None:
+        return None, report
+    rgb, _ = _sample(source)
+    height, width = rgb.shape[:2]
+    top, bottom, left, right = int(height * .30), int(height * .80), int(width * .30), int(width * .70)
+    region = rgb[top:bottom, left:right]
+    if min(region.shape[:2]) < 12:
+        return None, {**report, 'reason': 'insufficient_source_support'}
+    lab = cv2.cvtColor(region, cv2.COLOR_RGB2LAB)
+    center = np.median(lab.reshape(-1, 3), axis=0)
+    if not 8 < center[0] < 72:
+        return None, {**report, 'reason': 'ambiguous_exposure_or_bright_material'}
+    accepted = []
+    for row, ys in enumerate(np.array_split(np.arange(len(lab)), 3)):
+        for col, xs in enumerate(np.array_split(np.arange(lab.shape[1]), 3)):
+            tile = np.median(lab[np.ix_(ys, xs)].reshape(-1, 3), axis=0)
+            if abs(float(tile[0] - center[0])) <= 18 and np.linalg.norm(tile[1:] - center[1:]) <= 8:
+                accepted.append((row, col))
+    report['reference_tiles'] = len(accepted)
+    if (len(accepted) < 6 or len({r for r, _ in accepted}) < 3 or
+            len({c for _, c in accepted}) < 3):
+        return None, {**report, 'reason': 'inconsistent_central_material'}
+    # Keep both colors of stripes/patterns within agreeing tiles. Exclude entire
+    # inconsistent tiles instead of choosing pixels by the desired output color.
+    support = np.zeros((height, width), dtype=np.uint8)
+    ys_parts = np.array_split(np.arange(top, bottom), 3)
+    xs_parts = np.array_split(np.arange(left, right), 3)
+    for row, col in accepted:
+        support[np.ix_(ys_parts[row], xs_parts[col])] = 255
+    return Image.fromarray(support), {**report, 'accepted': True,
+                                      'reason': 'spatial_material_consensus'}
+
+
 def restore_color_fidelity(source, generated, source_mask=None, generated_mask=None):
     """Local color refinement. No targets, captions, model calls or new dependency."""
     balanced, backdrop = _studio_cast(generated, generated_mask)
     result, material = _material_anchor(source, balanced, source_mask, generated_mask)
     dark = {'applied': False, 'reason': 'material_anchor_available'}
+    support_report = {'accepted': False, 'reason': 'not_needed'}
+    fallback_material = {'applied': False, 'reason': 'not_needed'}
     if material['reason'] in ('missing_foreground_mask', 'source_mask_insufficient', 'source_mask_fragment'):
         # Preserve the existing conservative fallback when SAM is unavailable.
         result, dark = preserve_dark_tones(source, balanced, generated_mask)
+        if not dark['applied']:
+            support, support_report = _central_material_reference(source, balanced, generated_mask)
+            if support is not None:
+                result, fallback_material = _material_anchor(source, balanced, support, generated_mask)
     return result, {'method': 'studio_neutrality_and_foreground_material_anchor', 'calibrated': False,
-                    'applied': backdrop['applied'] or material['applied'] or dark['applied'],
-                    'backdrop': backdrop, 'material': material, 'dark_fallback': dark}
+                    'applied': backdrop['applied'] or material['applied'] or dark['applied'] or fallback_material['applied'],
+                    'backdrop': backdrop, 'material': material, 'dark_fallback': dark,
+                    'source_support': support_report, 'fallback_material': fallback_material}
 
 
 def to_linear(rgb):
@@ -297,97 +346,4 @@ def preserve_dark_tones(source: Image.Image, generated: Image.Image, generated_m
     corrected = to_srgb(to_linear(full)*factor[...,None])
     result = Image.fromarray(np.uint8(np.rint(np.clip(corrected,0,1)*255)))
     report.update(applied=True, reason='bounded_dark_tone_lift', gain_linear_rgb=round(gain,5))
-    return result, report
-
-
-def normalize_illumination(image: Image.Image, mask: Image.Image):
-    strength = float(os.getenv('COLOR_CORRECTION_STRENGTH', '1.05'))
-    if not np.isfinite(strength) or not .5 <= strength <= 1.5:
-        raise ValueError('COLOR_CORRECTION_STRENGTH must be 0.5..1.5')
-    rgb = np.asarray(image.convert('RGB'), dtype=np.float32) / 255
-    region = np.asarray(mask.convert('L').resize(image.size, Image.Resampling.NEAREST)) > 127
-    report = {'status': 'uncertain', 'applied': False, 'gains_rgb': [1., 1., 1.],
-              'reason': '', 'method': 'background_illuminant_linear_rgb',
-              'calibrated': False, 'candidate_fraction': 0., 'strength': strength}
-
-    def unchanged(reason):
-        report['reason'] = reason
-        return image.convert('RGB').copy(), report
-
-    high, low = rgb.max(axis=2), rgb.min(axis=2)
-    saturation = (high - low) / np.maximum(high, 1e-6)
-    # Do not use dark folds, saturated prints, clipped highlights, or the white
-    # canvas added by the pipeline: this function only receives the original.
-    candidates = (high > .42) & (high < .98) & (saturation < .40)
-    report['candidate_fraction'] = round(float(candidates.mean()), 4)
-    if not region.any():
-        return unchanged('empty_object_mask')
-    # Exclude a band around the product: matte errors must not let fabric colors
-    # influence the scene illuminant. Work on the real scene, never the added white.
-    radius = max(1, round(min(image.size) * .015))
-    expanded = cv2.dilate(region.astype(np.uint8), np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)) > 0
-    background_candidates = candidates & ~expanded
-    report['background_candidate_fraction'] = round(float(background_candidates.mean()), 4)
-    if np.count_nonzero(background_candidates) < 64:
-        return unchanged('no_independent_scene_reference')
-    linear = to_linear(rgb)
-    chroma = linear / np.maximum(linear.mean(axis=2, keepdims=True), 1e-6)
-    estimates = []
-    positions = []
-    rows = np.array_split(np.arange(rgb.shape[0]), 6)
-    cols = np.array_split(np.arange(rgb.shape[1]), 6)
-    for row, ys in enumerate(rows):
-        for col, xs in enumerate(cols):
-            chosen = background_candidates[np.ix_(ys, xs)]
-            if chosen.sum() >= 16:
-                samples = chroma[np.ix_(ys, xs)][chosen]
-                estimate = np.median(samples, axis=0)
-                # Reject tiles containing multiple incompatible candidate colors.
-                spread = np.percentile(np.max(np.abs(np.log(samples / estimate)), axis=1), 90)
-                if spread < .12:
-                    estimates.append(estimate)
-                    positions.append((row, col))
-    if len(estimates) < 4 or len({p[0] for p in positions}) < 2 or len({p[1] for p in positions}) < 2:
-        return unchanged('insufficient_spatial_support')
-    estimates = np.asarray(estimates)
-    illuminant = np.median(estimates, axis=0)
-    disagreement = float(np.percentile(np.max(np.abs(np.log(estimates / illuminant)), axis=1), 90))
-    report['reference_tiles'] = len(estimates)
-    report['regional_disagreement'] = round(disagreement, 4)
-    if disagreement > .16:
-        return unchanged('mixed_light_or_conflicting_surface_colors')
-    # Fabric is never forced to neutral or required to agree with the background.
-    # This preserves cream, pastels and uniformly colored products.
-    report['estimated_light_rgb'] = [round(float(v), 5) for v in illuminant]
-    light_preview = np.clip(to_srgb(illuminant / illuminant.max()), 0, 1)
-    report['estimated_light_srgb'] = [int(round(float(v) * 255)) for v in light_preview]
-    report['assumption'] = 'Background candidates are neutral surfaces under the same light as the object; not calibrated.'
-    gains = 1 / illuminant
-    # Preserve illuminant luminance instead of boosting exposure to pure white.
-    weights = np.array([.2126, .7152, .0722])
-    # Modest extra chromatic correction; normalize exposure independently so
-    # stronger white balance does not become an arbitrary brightness boost.
-    gains = gains ** strength
-    gains *= float(np.dot(illuminant, weights) / np.dot(illuminant * gains, weights))
-    if gains.min() < .60 or gains.max() > 1.85:
-        return unchanged('cast_too_strong_for_reliable_correction')
-    if np.max(np.abs(gains - 1)) < .015:
-        report.update(status='neutral', reason='no_significant_cast')
-        return image.convert('RGB').copy(), report
-    corrected = linear * gains
-    # A few bright trims or white motifs must not disable white balance for the
-    # entire product. Fit exposure uniformly, then compress only out-of-gamut
-    # highlights with one scale per pixel, preserving linear channel ratios.
-    # Never clip blue independently: that would leave warm whites yellow.
-    peak = np.max(corrected, axis=2)
-    exposure_scale = min(1., 1. / max(1., float(np.percentile(peak[region], 99.5))))
-    if exposure_scale < .8:
-        return unchanged('correction_requires_excessive_exposure_reduction')
-    corrected *= exposure_scale
-    corrected /= np.maximum(1., corrected.max(axis=2, keepdims=True))
-    result = Image.fromarray(np.uint8(np.rint(np.clip(to_srgb(corrected), 0, 1) * 255)))
-    report.update(status='estimated', applied=True, reason='consistent_background_references',
-                  gains_rgb=[round(float(x), 5) for x in gains],
-                  exposure_scale=round(exposure_scale, 5),
-                  highlight_fraction=round(float((peak[region] > 1).mean()), 5))
     return result, report

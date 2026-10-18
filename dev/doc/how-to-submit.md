@@ -1,63 +1,38 @@
+# Generate the dev submission
 
-## Root venv setup
-
-```bash
-uv venv --python 3.12
-uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
-uv pip install --python .venv -e 'scorer[test]'
-```
-
-
-## Backend venv setup
+Run from the repository root, with the backend installed and its `.env` configured.
+These commands generate all 27 dev products, four at a time, overwriting their
+previous final PNGs. No local reference score exists for this split.
 
 ```bash
-cd dev/btc-sartiq/backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+screen -S submission-dev
 ```
 
-Remember to add fal key to `.env`
-
-
-## Layout
-
-```
-submissions/btc/<garment_id>/front.png
-```
-
-- dev: `d001`–`d027`, test: `g01`–`g15`. Both in the same team folder
-- A missing garment scores 0, so submit all 42
-
-
-## Submitting
-
-Run from `neural-wave-2026/` after setup
-
-1. Run the pipeline on every dev & test garment.
+Inside screen:
 
 ```bash
-.venv/bin/python -c "import json;[print(r['garment_id'],*['sartiq_neural_wave_2026/'+p for p in r['inputs']]) for s in ('dev','test') for r in map(json.loads, open(f'sartiq_neural_wave_2026/{s}/inputs.jsonl'))]" | while read id first rest; do
-    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py --views $first $rest || {
-  echo "FAIL $id"; continue; }
-    mkdir -p submissions/btc/$id
-    cp dev/btc-sartiq/validation/${id}_$(basename ${first%.*})_studio.png submissions/btc/$id/front.png
-  done
+mkdir -p dev/logs dev/submissions/btc
+
+dev/btc-sartiq/backend/.venv/bin/python -c "import json,shlex; d='/home/luca/Downloads/sartiq_neural_wave_2026/'; [print(shlex.join([r['garment_id'],*[d+p for p in r['inputs']]])) for r in map(json.loads,open(d+'dev/inputs.jsonl'))]" | xargs -r -P 4 -L 1 bash -c '
+  id=$0; first=$1
+  dev/btc-sartiq/backend/.venv/bin/python -B dev/btc-sartiq/scripts/validate_studio.py --views "$@" > "dev/logs/$id.log" 2>&1 || { echo "FAIL $id"; exit 0; }
+  mkdir -p "dev/submissions/btc/$id"
+  cp "dev/btc-sartiq/validation/${id}_$(basename "${first%.*}")_studio.png" "dev/submissions/btc/$id/front.png" && echo "OK $id"'
 ```
 
-`--views` sends all the garment's photos as views of one garment (first is primary, max 5)
+- Final images: `dev/submissions/btc/<garment_id>/front.png`.
+- Logs: `dev/logs/<garment_id>.log`; details: `dev/btc-sartiq/validation/`.
+- Detach: **Ctrl+A**, then **D**. Reattach: `screen -r submission-dev`.
 
-Up to 7 fal calls per garment, about 300 for all 42
+## Package
 
-2. Validate and zip:
+After generating every split required by the organisers, use their packager:
 
 ```bash
-.venv/bin/python scripts/make_submission.py --submissions submissions --team btc --dataset sartiq_neural_wave_2026 --zip
+dev/.score-venv/bin/python scripts/make_submission.py \
+  --submissions dev/submissions --team btc \
+  --dataset /home/luca/Downloads/sartiq_neural_wave_2026 --zip
 ```
 
-Must report 0 errors. Writes `btc.zip`
-
-3. Hand in, through the channel the organisers announce:
-    1. `btc.zip`
-    2. the pipeline source, with dependencies and run instructions
-    3. the capture-protocol write-up
+Check that validation reports no missing or invalid images. Generating only `dev`
+does not supply any separately required `test` products.

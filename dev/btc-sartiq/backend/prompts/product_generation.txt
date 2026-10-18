@@ -9,6 +9,14 @@ to recover the whole item. If it is a garment, show it front side up in an uprig
 flat lay, with sleeves outward, smooth steam-pressed fabric and all straps preserved.
 
 Preserve its geometry, materials, true colors, lettering, logos and every component.
+Preserve relative dimensions and component positions after perspective correction;
+do not standardize the product's shape or proportions to a generic catalogue item.
+Keep the same printed artwork, internal shapes, lettering and gradients, with its
+size and position fixed relative to the product's edges, seams and attachments.
+Retain pattern spacing, direction and motif scale, and the original weave/stitch
+size and surface finish. Cleaning must preserve these fine details without blurring
+them, adding artificial grain or inventing missing markings. Photographs override
+auxiliary descriptions of fit, length, view and materials.
 For glasses, preserve both lenses, frame shape, bridge, hinges and temples, including
 holes and lens tint. Keep straps, hardware and small details. Do not iron rigid objects
 or flatten a structured bag. Do not invent unseen parts or change the design.

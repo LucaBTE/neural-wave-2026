@@ -1,0 +1,67 @@
+{
+  "version": "0.1",
+  "change": "Remove inactive legacy code and research tools; no change to the active pipeline.",
+  "offline_graph_cases": {
+    "normal": {
+      "requests_identical": true,
+      "output_identical": true,
+      "result_sha256": "2afc484bf4eec3565695a5d3d6d373b421dc5aabb39154baa928f07fd8868c3c"
+    },
+    "multiview": {
+      "requests_identical": true,
+      "output_identical": true,
+      "result_sha256": "2afc484bf4eec3565695a5d3d6d373b421dc5aabb39154baa928f07fd8868c3c"
+    },
+    "fallback": {
+      "requests_identical": true,
+      "output_identical": true,
+      "result_sha256": "d76367f4eef6b0d6e8a6d009244d13ee61d78fb563f0aacb5123dd62f25e32db"
+    },
+    "duplicate": {
+      "requests_identical": true,
+      "output_identical": true,
+      "result_sha256": "2afc484bf4eec3565695a5d3d6d373b421dc5aabb39154baa928f07fd8868c3c"
+    },
+    "accessory": {
+      "requests_identical": true,
+      "output_identical": true,
+      "result_sha256": "2afc484bf4eec3565695a5d3d6d373b421dc5aabb39154baa928f07fd8868c3c"
+    }
+  },
+  "saved_real_images": [
+    {
+      "garment": "t0001",
+      "result_sha256": "280b7a7dc2d948f90ece435879b3999c257e34705fa2651329429e3f5150aff8",
+      "matches_archived_v01_processing": true,
+      "matches_saved_v01_final": true
+    },
+    {
+      "garment": "t0002",
+      "result_sha256": "bd70292895054478b0ebeff8b00096cb1b53f0a0db82634743228b688e38fcab",
+      "matches_archived_v01_processing": true,
+      "matches_saved_v01_final": true
+    },
+    {
+      "garment": "t0003",
+      "result_sha256": "959e7cd56307e4379336f21dc7b62b465be93d613af12b122143f64ffceb354b",
+      "matches_archived_v01_processing": true,
+      "matches_saved_v01_final": true
+    },
+    {
+      "garment": "t0004",
+      "result_sha256": "c3b70af1bad09b5de856ae5fe8c50773c3ca6a36a71d6ea227e3a2fdfc735f4f",
+      "matches_archived_v01_processing": true,
+      "matches_saved_v01_final": true
+    },
+    {
+      "garment": "t0005",
+      "result_sha256": "4ce9d381cafc70183574262564918bb12054bcfad2d8461b1983c9de19bbc02f",
+      "matches_archived_v01_processing": true,
+      "matches_saved_v01_final": true
+    }
+  ],
+  "submission_prompts_identical": 27,
+  "frontend_files_checked": 31,
+  "frontend_files_changed": [],
+  "new_fal_calls": 0
+}

@@ -18,23 +18,22 @@ from fal_client.client import FalClientError
 from httpx import HTTPError
 from langgraph.graph import END, START, StateGraph
 from quality import compare_product
-from color import normalize_illumination, restore_color_fidelity, normalize_color_profile
-from generation_prompt import build_generation_prompt, build_pressing_prompt
-from garment_analysis import ANALYSIS_MODELS, DEFAULT_MODEL, analyze_garment, analysis_settings, prepare_analysis_image
+from color import restore_color_fidelity, normalize_color_profile
+from generation_prompt import build_generation_prompt
+from vision import analysis_settings
 from execution_trace import begin_step, end_step
 from target_selection import select_centered_mask, assess_product_selection
 from product_classification import CLASSIFICATION_MODEL, LOCALIZATION_MODEL, classify_product, locate_product
 from product_validation import (VALIDATION_MODEL, CHECK_PREFIX, CHECK_TIMEOUT,
                                 check_single_product, single_product_repair_prompt)
 from request_reuse import ReuseCache
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
+from studio_fidelity import context_reference, clean_detached_fragment
+from PIL import Image, ImageDraw, ImageOps
 
 SAM_MODEL = "fal-ai/sam-3/image"
 BIREF_MODEL = "fal-ai/birefnet/v2"
-DESCRIPTION_MODEL = DEFAULT_MODEL
-RESTYLE_MODEL = "fal-ai/nano-banana-pro/edit"
 FAITHFUL_MODEL = "google/nano-banana-2.1/edit"
-MODELS = {"description": DESCRIPTION_MODEL, "segmentation": SAM_MODEL, "restyling": RESTYLE_MODEL,
+MODELS = {"description": CLASSIFICATION_MODEL, "segmentation": SAM_MODEL, "restyling": FAITHFUL_MODEL,
           "classification": CLASSIFICATION_MODEL,
           "localization": LOCALIZATION_MODEL,
           "background_removal": BIREF_MODEL, "product_validation":VALIDATION_MODEL,
@@ -143,7 +142,7 @@ def configure_fal() -> None:
 
 def call(model: str, arguments: dict) -> dict:
     configure_fal()
-    timeout = analysis_settings()['timeout'] if model in (*ANALYSIS_MODELS, LOCALIZATION_MODEL) else 300
+    timeout = analysis_settings()['timeout'] if model in (CLASSIFICATION_MODEL, LOCALIZATION_MODEL) else 300
     if model == VALIDATION_MODEL and arguments.get('prompt','').startswith(CHECK_PREFIX):
         timeout = min(timeout,CHECK_TIMEOUT)
     # The SDK defaults to 0.1s: ten status HTTP requests/sec for ONE inference.
@@ -152,18 +151,14 @@ def call(model: str, arguments: dict) -> dict:
 
 
 def pipeline_profile():
-    profile = os.getenv('FAL_PIPELINE_PROFILE', 'faithful').strip()
-    if profile not in ('faithful', 'staged'):
-        raise ValueError('FAL_PIPELINE_PROFILE must be faithful or staged')
-    return profile
+    return 'faithful'
 
 
 def generation_settings() -> tuple[str, str]:
-    default_model = FAITHFUL_MODEL if pipeline_profile() == 'faithful' else RESTYLE_MODEL
-    model = os.getenv("FAL_IMAGE_MODEL", default_model).strip()
+    model = os.getenv("FAL_IMAGE_MODEL", FAITHFUL_MODEL).strip()
     resolution = os.getenv("FAL_IMAGE_RESOLUTION", "2K").strip()
-    if model not in (FAITHFUL_MODEL, RESTYLE_MODEL, "fal-ai/nano-banana-2/edit"):
-        raise ValueError("FAL_IMAGE_MODEL must be google/nano-banana-2.1/edit, fal-ai/nano-banana-pro/edit or fal-ai/nano-banana-2/edit")
+    if model != FAITHFUL_MODEL:
+        raise ValueError("Pipeline 0.1 uses google/nano-banana-2.1/edit")
     if resolution not in ("1K", "2K", "4K"):
         raise ValueError("FAL_IMAGE_RESOLUTION must be 1K, 2K or 4K")
     return model, resolution
@@ -202,13 +197,6 @@ def garment_mask_from_sam(image: Image.Image, image_url: str, garment: str, targ
     garment_mask.info['target_selection'] = selection
     return garment_mask
 
-def background_mask(garment_mask: Image.Image, feather: int = 0) -> Image.Image:
-    # White = regenerate, BLACK = keep (object preserved). Small inward dilation
-    # of the kept area helps avoid replacing garment edge pixels.
-    protected = garment_mask.convert("L")
-    if feather > 0: protected = protected.filter(ImageFilter.MaxFilter(2*feather+1))
-    return ImageOps.invert(protected)
-
 
 def output_url(model: str, arguments: dict) -> str:
     urls = extract_urls(call(model, arguments))
@@ -237,26 +225,6 @@ def remove_background(image: Image.Image, image_url: str, matte=None) -> Image.I
     result = image.convert("RGBA")
     result.putalpha(alpha)
     return result
-
-
-def compose_studio(cutout: Image.Image, size=(1200, 1800)) -> tuple[Image.Image, Image.Image]:
-    """Deterministic white background; fit without distorting the restyled garment."""
-    alpha = cutout.getchannel("A")
-    bbox = alpha.point(lambda p: 255 if p > 20 else 0).getbbox()
-    if bbox is None:
-        raise RuntimeError("No garment left after background removal")
-    cropped = cutout.crop(bbox)
-    # Fit the actual object, including small generated subjects, to catalogue
-    # framing. thumbnail() never enlarged them and left excessive white margins.
-    scale = min(size[0] * .78 / cropped.width, size[1] * .72 / cropped.height)
-    cropped = cropped.resize((max(1, round(cropped.width * scale)),
-                              max(1, round(cropped.height * scale))), Image.Resampling.LANCZOS)
-    position = ((size[0] - cropped.width) // 2, (size[1] - cropped.height) // 2)
-    canvas = Image.new("RGB", size, "white")
-    canvas.paste(cropped, position, cropped.getchannel("A"))
-    mask = Image.new("L", size, 0)
-    mask.paste(cropped.getchannel("A"), position)
-    return canvas, mask
 
 
 class PipelineState(TypedDict, total=False):
@@ -289,6 +257,8 @@ class PipelineState(TypedDict, total=False):
     source_upload_status: str
     reference_uploads: list[str]
     reference_policy: str
+    reference_crop: list[int] | None
+    output_cleanup: dict
     direct_reference: bool
     recovery: dict
     inspected_image: Image.Image | None
@@ -301,9 +271,7 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
                    run_id: str | None = None):
     """Single-click workflow, with at most one edit for detected duplicate products."""
     model, resolution = generation_settings()  # Validate before any paid call.
-    faithful = pipeline_profile() == 'faithful'
     analysis_config = analysis_settings()
-    pressing_prompt = '' if faithful else build_pressing_prompt()
     metrics = {"stages_seconds": {}, "total_seconds": 0.0}
     pillow = {'Pillow': 'pillow'}
     remote = {'fal-client': 'fal-client', 'LangGraph': 'langgraph'}
@@ -315,18 +283,14 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
         'locate': ('Locating product', 'locating', LOCALIZATION_MODEL, {**pillow, **remote},
                    {'max_side': 1280, 'timeout_seconds': analysis_config['timeout']}),
         'isolate': ('Preparing', 'preparing', SAM_MODEL, {**vision, **remote}, {}),
-        'balance': ('Balancing colors', 'balancing_color', None, {**vision, **remote}, {}),
-        'describe': ('Analyzing product', 'describing', analysis_config['model'], {**pillow, **remote},
-                     {'timeout_seconds': analysis_config['timeout'], 'max_side': analysis_config['max_side'],
-                      'required': False, 'reasoning': analysis_config['reasoning']}),
+        'balance': ('Preparing references', 'balancing_color', None, {**pillow, **remote}, {}),
         'restyle': ('Creating photo', 'generating', model, remote, {'resolution': resolution}),
-        'press': ('Removing wrinkles', 'pressing', model, remote, {'resolution': resolution}),
         'inspect': ('Checking product', 'checking_product', VALIDATION_MODEL, {**pillow, **remote},
                     {'timeout_seconds':min(analysis_config['timeout'],CHECK_TIMEOUT), 'max_side':768}),
         'repair_product': ('Correcting duplicate product', 'correcting_product', model, remote, {'resolution':resolution}),
         'inspect_repair': ('Verifying correction', 'rechecking_product', VALIDATION_MODEL, {**pillow, **remote},
                            {'timeout_seconds':min(analysis_config['timeout'],CHECK_TIMEOUT), 'max_side':768}),
-        'finish': ('Refining', 'finishing', BIREF_MODEL, {**pillow, **remote}, {}),
+        'finish': ('Refining', 'finishing', BIREF_MODEL, {**vision, **remote}, {}),
         'verify': ('Final check', 'checking_quality', None, {**vision, **remote}, {}),
     }
 
@@ -368,14 +332,13 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
         report('classifying', classification=target,
                stages=progress_stages())
         result = {**recovery, 'classification': target}
-        if faithful:
-            description = target.get('description') or (target['category'] + ': ' + target['label'])
-            result.update(garment_description=description, pressing_prompt='', analysis={
-                'source':'classification', 'model':CLASSIFICATION_MODEL,
-                'status':'complete' if target.get('identity_supported', True) else 'unavailable',
-                'cache_hit':target['cache_hit'], 'view_count':1 + len(state.get('additional_images', [])),
-                'required':False, 'identity_supported':target.get('identity_supported', True),
-                'separate_model_request':False})
+        description = target.get('description') or (target['category'] + ': ' + target['label'])
+        result.update(garment_description=description, pressing_prompt='', analysis={
+            'source':'classification', 'model':CLASSIFICATION_MODEL,
+            'status':'complete' if target.get('identity_supported', True) else 'unavailable',
+            'cache_hit':target['cache_hit'], 'view_count':1 + len(state.get('additional_images', [])),
+            'required':False, 'identity_supported':target.get('identity_supported', True),
+            'separate_model_request':False})
         return result
 
     def locate(state):
@@ -447,57 +410,44 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
 
     def balance(state):
         report("balancing_color")
-        scene_reference = faithful or state.get('direct_reference', False)
-        if scene_reference:
-            corrected = state['image'].copy()
-            illumination = {'status':'deferred', 'applied':False, 'gains_rgb':[1.,1.,1.],
-                            'reason':'original_scene_retained_for_relighting', 'calibrated':False,
-                            'method':'scene_context', 'strength':0.}
-        else:
-            corrected, illumination = normalize_illumination(state["image"], state["mask"])
-        snapshot("color", "Source colors" if scene_reference else "Color correction", corrected)
-        reference = corrected if scene_reference else Image.composite(
-            corrected, Image.new("RGB", corrected.size, "white"), state["mask"])
+        corrected = state['image'].copy()
+        illumination = {'status':'deferred', 'applied':False, 'gains_rgb':[1.,1.,1.],
+                        'reason':'original_scene_retained_for_relighting', 'calibrated':False,
+                        'method':'scene_context', 'strength':0.}
+        snapshot("color", "Source colors", corrected)
+        reference = corrected
+        crop = None
+        if not state.get('direct_reference'):
+            reference, crop = context_reference(reference, state['classification'], state.get('mask'))
+        # Deduplicate source photos before replacing the primary with a crop;
+        # otherwise uploading the same photo again would create two references.
+        seen = {_image_key(state['image'])}
+        extra_images = []
+        for extra in state.get('additional_images', []):
+            key = _image_key(extra)
+            if key not in seen:
+                seen.add(key)
+                extra_images.append(extra)
         with ThreadPoolExecutor(max_workers=3) as uploads:
             reference_upload = uploads.submit(upload_reference, reference)
             additional_uploads = [uploads.submit(upload_reference, extra)
-                                  for extra in state.get('additional_images', [])]
+                                  for extra in extra_images]
             reference_url, reference_reuse = reference_upload.result()
             additional = [future.result() for future in additional_uploads]
         # Keep a local preview even after temporary input storage expires.
         snapshot("reference", "Generation reference", reference)
         return {"color_reference": corrected, "illumination": illumination,
                 "color_url": reference_url, "reference_url": reference_url,
+                'reference_crop': crop,
                 'reference_policy': 'source_photographs' if state.get('direct_reference') else
-                    'original_scene' if faithful else 'isolated_reference',
+                    'context_crop' if crop else 'original_scene',
                 'additional_reference_urls': [url for url, _ in additional],
                 'reference_uploads': [reference_reuse, *[reuse for _, reuse in additional]]}
 
-    def describe(state):
-        report("describing")
-        if state.get('direct_reference'):
-            return {'garment_description':state['classification'].get('description') or
-                    'Use the original photographs to identify and reproduce the complete product.',
-                    'analysis':{'source':'reference_images', 'status':'unavailable', 'cache_hit':False,
-                                'view_count':1 + len(state.get('additional_images', [])),
-                                'required':False, 'model_invoked':False}}
-        try:
-            description, analysis, cropped = analyze_garment(state["color_reference"], state["mask"],
-                state["illumination"], call, extract_description, png_bytes, target=state['classification'],
-                additional_images=state.get('additional_images'))
-        except REFERENCE_ERRORS as exc:
-            return recovered(state, 'describe', exc,
-                garment_description=state['classification'].get('description') or state['classification']['label'],
-                analysis={'source':'reference_images', 'status':'unavailable', 'cache_hit':False,
-                          'view_count':1 + len(state.get('additional_images', [])),
-                          'required':False, 'model_invoked':True})
-        snapshot("description", "Product analysis", cropped)
-        report("describing", analysis=analysis)
-        return {"garment_description": description, "analysis": {**analysis, 'required':False}}
 
     def restyle(state):
-        # One full primary view, with each uploaded photograph supplied once.
-        # Crops of the same primary view can be interpreted as extra garments.
+        # One primary reference, with each distinct source photo supplied once.
+        # The context crop replaces the primary; it is never a second reference.
         references = list(dict.fromkeys([state['reference_url'], *state.get('additional_reference_urls', [])]))
         prompt = build_generation_prompt(state["garment_description"], state["illumination"],
                                          state['classification'], additional_count=len(references)-1)
@@ -508,21 +458,9 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
             "output_format": "png", "num_images": 1})
         snapshot("generated", "Generated photo", url)
         result = {"generated_url": url, "generation_prompt": prompt}
-        if faithful:
-            result.update(pressed_url=url)
+        result.update(pressed_url=url)
         return result
 
-    def press(state):
-        if state['classification']['kind'] != 'garment':
-            return {'pressed_url': state['generated_url'], 'pressing_prompt': ''}
-        report('pressing', pressing_prompt=pressing_prompt)
-        # Reuse only the new studio image; the original wrinkled source must not
-        # reintroduce its surface condition during the dedicated finishing edit.
-        url = output_url(model, {'image_urls': [state['generated_url']],
-            'prompt': pressing_prompt, 'aspect_ratio': '2:3', 'resolution': resolution,
-            'output_format': 'png', 'num_images': 1})
-        snapshot('pressed', 'Steam-pressed photo', url)
-        return {'pressed_url': url, 'pressing_prompt': pressing_prompt}
 
     def inspect(state, after_repair=False):
         phase = 'rechecking_product' if after_repair else 'checking_product'
@@ -571,18 +509,21 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
                 snapshot('composed', 'Studio photograph', result)
                 return recovered(state, 'finish', exc, result=result, result_mask=None,
                                  generated_image=generated)
-        snapshot("cutout", "Product matte (diagnostic)" if faithful else "Background removed", cutout)
-        if faithful or state.get('direct_reference'):
-            # Preserve the model's RGB, shadows and framing. The matte is for
-            # color blending/diagnostics; recompositing can erase pale straps and prints.
-            result = ImageOps.pad(generated, (1200,1800), method=Image.Resampling.LANCZOS,
-                                  color=(245,245,245))
-            result_mask = ImageOps.pad(cutout.getchannel('A'), (1200,1800),
-                                       method=Image.Resampling.NEAREST, color=0)
-        else:
-            result, result_mask = compose_studio(cutout)
+        snapshot("cutout", "Product matte (diagnostic)", cutout)
+        # Preserve the model's RGB, shadows and framing. The matte is for
+        # color blending/diagnostics; recompositing can erase pale straps and prints.
+        result = ImageOps.pad(generated, (1200,1800), method=Image.Resampling.LANCZOS,
+                              color=(245,245,245))
+        result_mask = ImageOps.pad(cutout.getchannel('A'), (1200,1800),
+                                   method=Image.Resampling.NEAREST, color=0)
+        cleanup = {'applied':False, 'removed_boxes':[]}
+        result, result_mask, cleanup = clean_detached_fragment(
+            result, result_mask, state['classification']['category'])
+        if cleanup['applied']:
+            snapshot('cleanup', 'Clean studio photograph', result)
         snapshot("composed", "Studio composition", result)
-        return {"result": result, "result_mask": result_mask, 'generated_image':generated}
+        return {"result": result, "result_mask": result_mask, 'generated_image':generated,
+                'output_cleanup':cleanup}
 
     def verify(state):
         report("checking_quality")
@@ -600,6 +541,7 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
                        'note':'No mask or diagnostic scores were invented.'}
         quality['recovery'] = state.get('recovery', {})
         quality['color_fidelity'] = color_fidelity
+        quality['output_cleanup'] = state.get('output_cleanup', {'applied':False, 'removed_boxes':[]})
         checks = state['product_checks']
         single = checks[-1]['verdict'] == 'single'
         quality['single_product'] = {'status':'passed' if single else 'unverified',
@@ -608,13 +550,8 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
             quality['warnings'].append('The single-product check was inconclusive; verify that no duplicate garment is visible.')
             quality.update(status='review_required',passed=False)
         quality["illumination"] = state["illumination"]
-        quality["color_reference"] = "estimated_white_balance" if state["illumination"]["applied"] else "uncorrected_input"
-        if faithful:
-            quality['color_reference'] = 'original_capture_lighting_dependent'
-            quality['pipeline_profile'] = 'faithful'
-        if state["illumination"]["status"] == "uncertain":
-            quality["warnings"].append("Illumination is ambiguous; true garment colors could not be established.")
-            quality.update(status="review_required", passed=False)
+        quality['color_reference'] = 'original_capture_lighting_dependent'
+        quality['pipeline_profile'] = 'faithful'
         if state['classification'].get('review_required'):
             quality['warnings'].append('Main-product classification is uncertain; verify that the output matches the intended product.')
             quality.update(status='review_required', passed=False)
@@ -624,20 +561,13 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
 
     graph = StateGraph(PipelineState)
     nodes = [("classify", classify), ("locate", locate), ("isolate", isolate), ("balance", balance),
-             ("describe", describe), ("restyle", restyle), ("press", press), ('inspect',inspect),
+             ("restyle", restyle), ('inspect',inspect),
              ('repair_product',repair_product), ('inspect_repair',lambda state:inspect(state,after_repair=True)),
              ("finish", finish), ("verify", verify)]
-    if faithful:
-        nodes = [(name,node) for name,node in nodes if name not in ('describe','press')]
-        steps['balance'] = ('Preparing references', 'balancing_color', None, {**pillow, **remote}, {})
     for name, node in nodes:
         def measured(state, operation=node, stage=name):
             started = perf_counter()
             label, phase, step_model, libraries, details = steps[stage]
-            skip_press = stage == 'press' and state['classification']['kind'] != 'garment'
-            if skip_press:
-                label, step_model, libraries = 'Steam pressing (not applicable)', None, {'LangGraph': 'langgraph'}
-                details = {'model_invoked': False, 'reason': 'Product is not a garment'}
             previous_trace = state.get('execution_trace', [])
             entry = begin_step(stage, label, step_model, libraries, run_id, **details)
             report(phase, execution_trace=[*previous_trace, entry])
@@ -647,7 +577,7 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
                 entry = end_step(entry, perf_counter() - started, 'error', error_type=type(exc).__name__)
                 report(phase, execution_trace=[*previous_trace, entry])
                 raise
-            outcome = 'skipped' if skip_press else 'complete'
+            outcome = 'complete'
             used = {}
             if stage == 'classify':
                 target = result['classification']
@@ -655,7 +585,7 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
                 if target.get('review_required') and not target['cache_hit']:
                     outcome = 'review_required'
                 used = {**target, 'model_invoked': not target['cache_hit'],
-                        'pipeline_profile':'faithful' if faithful else 'staged'}
+                        'pipeline_profile':'faithful'}
             elif stage == 'locate':
                 target = result['classification']
                 hit = target['localization_cache_hit']
@@ -680,17 +610,11 @@ def build_pipeline(on_progress: Callable[..., None] | None = None,
                 used = {**result['target_selection'], 'cache_status': reuse,
                         'cache_hit': reuse in ('cached', 'shared'), 'model_invoked': reuse in ('computed', 'fallback'),
                         'storage_uploads': int(result['source_upload_status'] == 'computed' and reuse in ('computed', 'fallback'))}
-            elif stage == 'describe':
-                analysis = result['analysis']
-                outcome = ('skipped' if not analysis.get('model_invoked', True) else 'fallback') if analysis['status'] == 'unavailable' else ('cached' if analysis['cache_hit'] else analysis['status'])
-                used = {'cache_hit': analysis['cache_hit'], 'view_count': analysis['view_count'],
-                        'input_size': analysis.get('input_size'),
-                        'input_format': analysis.get('input_format'), 'input_bytes': analysis.get('input_bytes'),
-                        'cache_status': analysis.get('cache_status'),
-                        'model_invoked': analysis.get('model_invoked', not analysis['cache_hit'])}
             elif stage == 'restyle':
                 used = {'input_image_count': len(set([state['reference_url'], *state.get('additional_reference_urls', [])])),
-                        'reference_policy':state['reference_policy']}
+                        'reference_policy':state['reference_policy'], 'reference_crop':state.get('reference_crop')}
+            elif stage == 'finish':
+                used = {'output_cleanup':result.get('output_cleanup', {'applied':False, 'removed_boxes':[]})}
             elif stage in ('inspect','inspect_repair'):
                 used = result['product_checks'][-1]
                 outcome = 'complete' if used['verdict'] == 'single' else 'review_required'

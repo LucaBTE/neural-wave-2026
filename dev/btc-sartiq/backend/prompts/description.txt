@@ -1,7 +1,0 @@
-Describe only the selected product in at most 70 English words.
-Identify its physical type, cut, material appearance, pattern and visible construction.
-Mention straps, ties, belts and hardware when present. Distinguish the selected garment
-from incidental clothing; it may originally be worn by the main foreground person.
-Describe product details, not the source pose or wrinkles. Do not guess fiber content,
-brand names, hidden features, exact colors under uncertain light or unreadable text.
-Image evidence matters more than supplied classification text. Return plain text only.

@@ -1,52 +1,48 @@
+# Official scoring
 
-## Root venv setup
+Run commands from the repository root. The supplied `dev` and `test` splits have
+no reference targets; use `train/pairs.jsonl` for local scoring.
 
-```bash
-uv venv --python 3.12
-uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
-uv pip install --python .venv -e 'scorer[test]'
-```
-
-
-## Backend venv setup
+## Scoring environment — first setup only
 
 ```bash
-cd dev/btc-sartiq/backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m venv dev/.score-venv
+dev/.score-venv/bin/python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+dev/.score-venv/bin/python -m pip install ./scorer python-dotenv
 ```
 
-Remember to add fal key to `.env`
+Weights are cached in `dev/.models/`. Keep an existing environment and weights.
+The backend key is read from `dev/btc-sartiq/backend/.env`.
 
-
-## Scoring
-
-Run from `neural-wave-2026/`
-
-1. Make the holdout, one time:
+## Compare Studio 0.1 and the baseline on the same five products
 
 ```bash
-.venv/bin/python scripts/make_holdout.py --pairs sartiq_neural_wave_2026/train/pairs.jsonl --frac 0.1 --seed 0 --out holdout/ --group-by-target
+/bin/python3 dev/compare_pipelines.py \
+  --dataset /home/luca/Downloads/sartiq_neural_wave_2026 \
+  --split train --count 5 --jobs 4
 ```
 
-2. Run the pipeline on each val pair and copy the result into the scorer layout. Start small: `head -3` does 3 pairs
+Each product uses its first input photograph. Targets are used only by the
+unchanged official scorer, never sent to a generation model. The command prints
+a comparison and saves predictions, diagnostics and scores under the printed
+`dev/comparisons/` folder. `--dry-run` checks selection without model calls;
+`--baseline-from <previous-comparison>` reuses matching saved baseline outputs.
+
+## Score existing predictions without generation
 
 ```bash
-.venv/bin/python -c "import json;[print(r['pair_id'],*['sartiq_neural_wave_2026/'+p for p in r['inputs']]) for r in map(json.loads, open('holdout/val.jsonl'))]" | head -3 | while read id first rest; do
-    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py --views $first $rest || {
-  echo "FAIL $id"; continue; }
-    mkdir -p predictions/btc/$id
-    cp dev/btc-sartiq/validation/${id}_$(basename ${first%.*})_studio.png predictions/btc/$id/front.png
-  done
+/bin/python3 dev/eval_val.py \
+  --pairs /home/luca/Downloads/sartiq_neural_wave_2026/train/pairs.jsonl \
+  --preds dev/predictions --team studio --out dev/scores --limit 5 --jobs 1
 ```
 
-Generated pics are moved from `dev/btc-sartiq/validation/${id}_input_1_studio.png` to `predictions/btc/$id/front.png`
+Expected layout: `<preds>/<team>/<garment>/front.png`. Read `leaderboard.csv` for
+aggregate results and `scores.jsonl` for individual metrics and flags. Missing
+submissions within the selected subset count as zero.
 
-3. Score:
+For the original baseline alone, `dev/baseline_nanobanana.py` forwards the authors'
+CLI options and optionally supports `--score` after generation.
 
-```bash
-.venv/bin/python scripts/eval_val.py --pairs holdout/val.jsonl --preds predictions --team btc --out val_out --jobs 1 --limit 3
-```
-
-Read val_out/leaderboard.csv. Each score is out of 100, and higher is better. Drop --limit 3 once you run all the pairs
+The final score is `0.40 colour + 0.25 LPIPS + 0.15 CLIP + 0.15 geometry + 0.05 SSIM`,
+with all reported similarities scaled to 0–100. LPIPS similarity is higher-is-better;
+its underlying raw distance is lower-is-better. See [the official specification](../../scorer/README.md).

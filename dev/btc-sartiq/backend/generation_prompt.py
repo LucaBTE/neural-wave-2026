@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 
 TEMPLATE_PATH = Path(__file__).with_name('prompts') / 'generation.txt'
-PRESSING_TEMPLATE_PATH = TEMPLATE_PATH.with_name('pressing.txt')
 PRODUCT_TEMPLATE_PATH = TEMPLATE_PATH.with_name('product_generation.txt')
 MULTIVIEW_TEMPLATE_PATH = TEMPLATE_PATH.with_name('multiview.txt')
 
@@ -24,11 +23,6 @@ def construction_observations(text: str) -> str:
     return re.sub(r'\s+', ' ', cleaned).strip(' ,;:-') or 'Use the photographs.'
 
 
-def build_pressing_prompt() -> str:
-    prompt = PRESSING_TEMPLATE_PATH.read_text(encoding='utf-8').strip()
-    if not prompt:
-        raise ValueError('Pressing prompt must not be empty')
-    return prompt
 
 
 def build_generation_prompt(description: str, illumination: dict, target=None, additional_count=0) -> str:

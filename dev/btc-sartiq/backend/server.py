@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from PIL import Image
 from pipeline import MODELS, build_pipeline, normalize_photo, generation_settings, pipeline_profile, png_bytes, CLASSIFICATION_MODEL
-from garment_analysis import analysis_settings
+from vision import analysis_settings
 from execution_trace import begin_step, end_step
 
 load_dotenv(Path(__file__).with_name('.env'))
@@ -93,21 +93,20 @@ def studio_task(job_id: str, data: bytes, additional_data: list[bytes] | None = 
 def config():
     model, resolution = generation_settings()
     analysis = analysis_settings()
-    faithful = pipeline_profile() == 'faithful'
-    return {'models': {**MODELS, 'restyling': model, 'pressing': None if faithful else model,
-                       'description': CLASSIFICATION_MODEL if faithful else analysis['model']},
+    return {'models': {**MODELS, 'restyling': model, 'pressing': None,
+                       'description': CLASSIFICATION_MODEL},
             'pipeline_profile':pipeline_profile(), 'generation_resolution': resolution,
-            'inference_requests_per_run': 6 if faithful else 8,
-            'inference_requests_cached_run': 3 if faithful else 4,
-            'inference_requests_max_per_run':8 if faithful else 10,
-            'inference_requests_max_cached_run':5 if faithful else 6,
+            'inference_requests_per_run': 6,
+            'inference_requests_cached_run': 3,
+            'inference_requests_max_per_run':8,
+            'inference_requests_max_cached_run':5,
             'duplicate_repair':{'max_attempts':1,'extra_inferences':2,'recheck_required':True},
             'reference_cache_seconds': 600,
-            'inference_requests_by_kind': {'garment':6 if faithful else 8, 'accessory':6 if faithful else 7, 'other':6 if faithful else 7},
-            'inference_requests_cached_by_kind': {'garment':3 if faithful else 4, 'accessory':3, 'other':3},
+            'inference_requests_by_kind': {'garment':6, 'accessory':6, 'other':6},
+            'inference_requests_cached_by_kind': {'garment':3, 'accessory':3, 'other':3},
             'analysis': {**analysis, 'required':False,
-                         'model':CLASSIFICATION_MODEL if faithful else analysis['model'],
-                         'source':'classification' if faithful else 'separate_request'},
+                         'model':CLASSIFICATION_MODEL,
+                         'source':'classification'},
             'inputs': {'max_photos': 5, 'max_file_bytes': 12_000_000, 'max_total_bytes': 48_000_000},
             'output': {'width': 1200, 'height': 1800, 'background': 'white'}}
 

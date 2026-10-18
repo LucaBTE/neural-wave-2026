@@ -1,0 +1,46 @@
+d009_input_1 starting
+08:54:03 INFO [standalone] Identifying product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90}
+d009_input_1 classifying
+d009_input_1 classifying
+d009_input_1 classifying
+08:54:07 INFO [standalone] Identifying product | fallback | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.537s | details={'reasoning': False, 'max_side': 1280, 'required': False, 'timeout_seconds': 90, 'label': 'Product shown in the reference photographs', 'category': 'product', 'kind': 'other', 'confidence': None, 'review_required': True, 'identity_supported': False, 'cache_hit': False, 'cache_status': 'unavailable', 'model_invoked': True, 'pipeline_profile': 'faithful', 'reason': 'source_reference_fallback', 'error_type': 'RuntimeError'}
+d009_input_1 classifying
+08:54:07 INFO [standalone] Locating product | running | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'max_side': 1280, 'timeout_seconds': 90}
+d009_input_1 locating
+d009_input_1 locating
+d009_input_1 locating
+08:54:07 INFO [standalone] Locating product | skipped | model=fal-ai/moondream3-preview/detect | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=0.000s | details={'max_side': 1280, 'timeout_seconds': 90, 'bbox': None, 'cache_hit': False, 'model_invoked': False, 'cache_status': 'skipped', 'reason': 'source_reference_fallback', 'error_type': 'RuntimeError'}
+d009_input_1 locating
+08:54:07 INFO [standalone] Preparing | running | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d009_input_1 preparing
+d009_input_1 preparing
+d009_input_1 preparing
+08:54:07 INFO [standalone] Preparing | skipped | model=fal-ai/sam-3/image | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=0.002s | details={'strategy': 'source_references', 'bbox': None, 'verified': False, 'cache_status': 'skipped', 'cache_hit': False, 'model_invoked': False, 'storage_uploads': 0, 'reason': 'source_reference_fallback', 'error_type': None}
+d009_input_1 preparing
+08:54:07 INFO [standalone] Preparing references | running | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d009_input_1 balancing_color
+d009_input_1 balancing_color
+08:54:09 INFO [standalone] Preparing references | complete | model=local | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=2.590s | details={'correction_applied': False, 'strength': 0.0, 'storage_uploads': 3, 'reused_uploads': 0}
+d009_input_1 balancing_color
+08:54:09 INFO [standalone] Creating photo | running | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'resolution': '2K'}
+d009_input_1 generating
+d009_input_1 generating
+08:54:33 INFO [standalone] Creating photo | complete | model=google/nano-banana-2.1/edit | libraries=fal-client==1.0.3, LangGraph==1.2.15 | duration=23.892s | details={'resolution': '2K', 'input_image_count': 3, 'reference_policy': 'source_photographs', 'reference_crop': None}
+d009_input_1 generating
+08:54:33 INFO [standalone] Checking product | running | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={'timeout_seconds': 30, 'max_side': 768}
+d009_input_1 checking_product
+d009_input_1 checking_product
+d009_input_1 checking_product
+08:54:38 INFO [standalone] Checking product | review_required | model=fal-ai/moondream3-preview/query | libraries=Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.583s | details={'timeout_seconds': 30, 'max_side': 768, 'model': 'fal-ai/moondream3-preview/query', 'after_repair': False, 'verdict': 'uncertain'}
+d009_input_1 checking_product
+08:54:38 INFO [standalone] Refining | running | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d009_input_1 finishing
+d009_input_1 finishing
+08:54:43 INFO [standalone] Refining | complete | model=fal-ai/birefnet/v2 | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=4.870s | details={'output_cleanup': {'applied': False, 'removed_boxes': []}}
+d009_input_1 finishing
+08:54:43 INFO [standalone] Final check | running | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=- | details={}
+d009_input_1 checking_quality
+d009_input_1 checking_quality
+08:54:47 INFO [standalone] Final check | complete | model=local | libraries=NumPy==2.5.4, OpenCV==4.14.0.94, Pillow==12.3.0, fal-client==1.0.3, LangGraph==1.2.15 | duration=3.734s | details={'storage_uploads': 1, 'color_fidelity': {'method': 'studio_neutrality_and_foreground_material_anchor', 'calibrated': False, 'applied': True, 'backdrop': {'applied': True, 'reason': 'consistent_neutral_studio_backdrop', 'gains_linear_rgb': [0.99899, 0.99898, 1.01324], 'reference_tiles': 12}, 'material': {'applied': False, 'reason': 'missing_foreground_mask'}, 'dark_fallback': {'method': 'dark_material_exposure_guard', 'applied': False, 'calibrated': False, 'gain_linear_rgb': 1.0, 'reason': 'source_is_not_consistently_dark_neutral', 'reference': 'central_source_consensus'}, 'source_support': {'accepted': True, 'reason': 'spatial_material_consensus', 'method': 'central_material_consensus', 'is_segmentation': False, 'reference_tiles': 9}, 'fallback_material': {'applied': True, 'reason': 'bounded_foreground_material_drift', 'source_median_lab': [25.208, 1.906, -0.266], 'generated_median_lab': [31.909, 1.094, -2.5], 'palette_disagreement': 0.71, 'lightness_offset': -3.2349, 'chroma_offset': [0.0, 0.0], 'chroma_gain': 0.92229, 'source_exposure_center': 25.238, 'generated_exposure_center': 31.708}}}
+d009_input_1 checking_quality
+d009_input_1 review_required

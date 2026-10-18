@@ -28,7 +28,6 @@ def main():
              'additional_images': [normalize_photo(extra.read_bytes()) for extra in extras]})
         state['result'].save(output / (name + '_studio.png'))
         (output / (name + '_prompt.txt')).write_text(state['generation_prompt'], encoding='utf-8')
-        (output / (name + '_pressing_prompt.txt')).write_text(state['pressing_prompt'], encoding='utf-8')
         (output / (name + '_quality.json')).write_text(json.dumps(state['quality'], indent=2))
         (output / (name + '_timings.json')).write_text(json.dumps(state['metrics'], indent=2))
         (output / (name + '_trace.json')).write_text(json.dumps(state['execution_trace'], indent=2))
