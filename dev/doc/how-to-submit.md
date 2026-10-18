@@ -34,18 +34,22 @@ submissions/btc/<garment_id>/front.png
 
 Run from `neural-wave-2026/` after setup
 
-1. Run the pipeline on every dev & test garment.
+1. Run the pipeline on every dev & test garment
 
 ```bash
-.venv/bin/python -c "import json;[print(r['garment_id'],*['sartiq_neural_wave_2026/'+p for p in r['inputs']]) for s in ('dev','test') for r in map(json.loads, open(f'sartiq_neural_wave_2026/{s}/inputs.jsonl'))]" | while read id first rest; do
-    dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py --views $first $rest || {
-  echo "FAIL $id"; continue; }
-    mkdir -p submissions/btc/$id
-    cp dev/btc-sartiq/validation/${id}_$(basename ${first%.*})_studio.png submissions/btc/$id/front.png
-  done
+mkdir -p logs && .venv/bin/python -c "import json;[print(r['garment_id'],*['sartiq_neural_wave_2026/'+p for p in r['inputs']]) for s in ('dev','test') for r in map(json.loads, open(f'sartiq_neural_wave_2026/{s}/inputs.jsonl'))]" | xargs -P 42 -L 1 bash -c '
+  id=$0; first=$1
+  [ -f submissions/btc/$id/front.png ] && { echo "SKIP $id"; exit 0; }
+  dev/btc-sartiq/backend/.venv/bin/python dev/btc-sartiq/scripts/validate_studio.py --views "$@" > logs/$id.log 2>&1 || {
+    echo "FAIL $id"; exit 0; }
+  mkdir -p submissions/btc/$id
+  cp dev/btc-sartiq/validation/${id}_$(basename ${first%.*})_studio.png submissions/btc/$id/front.png
+  echo "OK $id"'
 ```
 
 `--views` sends all the garment's photos as views of one garment (first is primary, max 5)
+
+Runs all 42 garments at once, each logging to `logs/<garment_id>.log`. Garments that already have a `front.png` are skipped, so a rerun retries only the failures
 
 Up to 7 fal calls per garment, about 300 for all 42
 
